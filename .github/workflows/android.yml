@@ -1,0 +1,114 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  build:
+    name: 构建 Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 准备 Android SDK 命令行工具
+        uses: android-actions/setup-android@v3
+
+      - name: 安装所需 SDK 组件
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: 安装 Gradle 8.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.2'
+
+      - name: 打印工具链版本
+        shell: bash
+        run: |
+          java -version
+          gradle --version
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+
+      - name: 构建 Debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build-log.txt
+
+      - name: 上传 APK 为构建产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: 创建 Release 并附 APK 直链
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: 自动构建 v1.0.${{ github.run_number }}
+          body: |
+            由 GitHub Actions 云端构建产出的 Debug APK。
+
+            - 提交：${{ github.sha }}
+            - 触发方式：${{ github.event_name }}
+          files: app/build/outputs/apk/debug/*.apk
+          draft: false
+          prerelease: false
+
+      - name: 构建失败时把日志写入 Issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try {
+              log = fs.readFileSync('build-log.txt', 'utf8');
+            } catch (err) {
+              log = '未能读取 build-log.txt：' + err.message;
+            }
+            const lines = log.split('\n');
+            let tail = lines.slice(-400).join('\n');
+            if (tail.length > 60000) {
+              tail = tail.slice(tail.length - 60000);
+            }
+            const issueTitle = 'CI 构建失败 - run ' + context.runNumber;
+            const body = [
+              'Gradle 构建失败，以下为日志末尾内容（最多 400 行）：',
+              '',
+              '```',
+              tail,
+              '```',
+              '',
+              '工作流运行：' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body: body
+            });
