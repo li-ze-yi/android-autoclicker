@@ -17,7 +17,7 @@ jobs:
   build:
     name: 构建 Debug APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: 检出代码
@@ -29,32 +29,68 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 准备 Android SDK 命令行工具
-        uses: android-actions/setup-android@v3
-
-      - name: 安装所需 SDK 组件
+      - name: 定位并准备 Android SDK
         shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          set -o pipefail
+          {
+            echo "===== 环境探测 ====="
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+            echo "JAVA_HOME=$JAVA_HOME"
+          } 2>&1 | tee -a build-log.txt
+
+          SDK_DIR=""
+          for cand in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" /usr/local/lib/android/sdk "$HOME/Android/Sdk"; do
+            if [ -n "$cand" ] && [ -d "$cand" ]; then SDK_DIR="$cand"; break; fi
+          done
+          echo "解析到的 SDK 目录: [$SDK_DIR]" | tee -a build-log.txt
+          if [ -z "$SDK_DIR" ]; then
+            echo "错误：未找到 Android SDK 目录" | tee -a build-log.txt
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          ls -la "$SDK_DIR" 2>&1 | tee -a build-log.txt
+
+          SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          fi
+          echo "sdkmanager=[$SDKMANAGER]" | tee -a build-log.txt
+          if [ -z "$SDKMANAGER" ]; then
+            echo "错误：未找到 sdkmanager" | tee -a build-log.txt
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" 2>&1 | tee -a build-log.txt
 
       - name: 安装 Gradle 8.2
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.2'
-
-      - name: 打印工具链版本
         shell: bash
         run: |
-          java -version
-          gradle --version
-          echo "ANDROID_HOME=${ANDROID_HOME}"
+          set -o pipefail
+          curl -sSL -o gradle-dist.zip "https://services.gradle.org/distributions/gradle-8.2-bin.zip" 2>&1 | tee -a build-log.txt
+          mkdir -p "$HOME/gradle-dist"
+          unzip -q gradle-dist.zip -d "$HOME/gradle-dist" 2>&1 | tee -a build-log.txt
+          echo "$HOME/gradle-dist/gradle-8.2/bin" >> "$GITHUB_PATH"
+          "$HOME/gradle-dist/gradle-8.2/bin/gradle" --version 2>&1 | tee -a build-log.txt
+
+      - name: 缓存 Gradle 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/notifications
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', '**/*.gradle.kts', 'gradle.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: 构建 Debug APK
         shell: bash
         run: |
           set -o pipefail
-          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build-log.txt
+          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
 
       - name: 上传 APK 为构建产物
         if: success()
@@ -89,26 +125,31 @@ jobs:
             try {
               log = fs.readFileSync('build-log.txt', 'utf8');
             } catch (err) {
-              log = '未能读取 build-log.txt：' + err.message;
+              try {
+                const files = fs.readdirSync('.');
+                log = '未找到 build-log.txt（' + err.message + '）。工作目录内容：\n' + files.join('\n');
+              } catch (e2) {
+                log = '未找到 build-log.txt，且无法列出目录：' + err.message;
+              }
             }
             const lines = log.split('\n');
-            let tail = lines.slice(-400).join('\n');
+            let tail = lines.slice(-500).join('\n');
             if (tail.length > 60000) {
               tail = tail.slice(tail.length - 60000);
             }
-            const issueTitle = 'CI 构建失败 - run ' + context.runNumber;
+            const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
             const body = [
-              'Gradle 构建失败，以下为日志末尾内容（最多 400 行）：',
+              'Android 构建失败，以下为日志末尾内容（最多 500 行）：',
               '',
               '```',
               tail,
               '```',
               '',
-              '工作流运行：' + context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId
+              '工作流运行：' + runUrl
             ].join('\n');
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: issueTitle,
+              title: 'CI 构建失败 - run ' + context.runNumber,
               body: body
             });
