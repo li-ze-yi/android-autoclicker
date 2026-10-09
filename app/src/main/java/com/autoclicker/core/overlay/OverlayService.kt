@@ -325,16 +325,32 @@ class OverlayService : Service() {
         scope.launch { ScriptRecorder.stepCount.collect { updateStatus() } }
         scope.launch { ScriptRecorder.preciseMode.collect { updateStatus() } }
         scope.launch { ScriptRecorder.recordPaused.collect { updateStatus() } }
+        // 诊断计数：即使没有产生步骤，也让状态栏上的"无障碍事件 N"实时刷新。
+        scope.launch { ScriptRecorder.accessibilityEventCount.collect { updateStatus() } }
     }
 
     private fun updateStatus() {
+        // 不变式：采集层只在"精确模式录制中"存在；从任意入口（含首页）结束录制后都要回收它，
+        // 否则会残留一层吞触摸的全屏窗口。
+        if (captureLayerView != null && !ScriptRecorder.isRecording.value) {
+            hideCaptureLayer()
+        }
+
         val state = ScriptRunner.state.value
         val recording = ScriptRecorder.isRecording.value
         val stepCount = ScriptRecorder.stepCount.value
         val clickerState = ClickerEngine.state.value
         val clickerRunning = ClickerEngine.isRunning
         val active = state.isActive || recording || clickerRunning
-        val statusText = OverlayUi.formatStatus(state, recording, stepCount)
+        val statusText = buildString {
+            append(OverlayUi.formatStatus(state, recording, stepCount))
+            // 诊断：非精确模式的录制靠无障碍事件，这里显示已收到的事件数，
+            // 便于区分"事件根本没进来"与"事件进来了但类型不在录制范围"。
+            if (recording && !ScriptRecorder.preciseMode.value) {
+                append("｜无障碍事件 ")
+                append(ScriptRecorder.accessibilityEventCount.value)
+            }
+        }
 
         val panel = panelView
         if (panel != null) {

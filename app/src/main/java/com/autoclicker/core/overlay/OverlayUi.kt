@@ -234,10 +234,12 @@ internal object OverlayUi {
     }
 
     /**
-     * 全屏透明采集层：吞掉全部触摸并逐条回调。
-     * 用于「精确录制模式」——由 ScriptRecorder 记录并回放给目标 App。
+     * 全屏透明采集层：吞掉触摸并逐条回调。
+     *
+     * [onTouch] 返回 **true 表示消费该事件**；返回 **false 表示透传给下层 App**（用于回放注入手势
+     * 期间避免自我级联）。用于「精确录制模式」——由 ScriptRecorder 记录并回放给目标 App。
      */
-    fun createCaptureLayer(context: Context, onTouch: (MotionEvent) -> Unit): View {
+    fun createCaptureLayer(context: Context, onTouch: (MotionEvent) -> Boolean): View {
         val root = FrameLayout(context)
         // 背景完全透明，不影响下方 App 的正常显示；极淡描边（0x22FFC107）
         // 仅为让用户感知当前处于采集态，不拦截视觉也不改变触摸行为。
@@ -247,11 +249,9 @@ internal object OverlayUi {
             setStroke(dp(context, 2f), 0x22FFC107)
         }
         root.isClickable = true
-        // 必须 return true 吞掉事件，否则触摸会落到下面的 App，导致录入与显示不一致。
-        root.setOnTouchListener { _, e ->
-            onTouch(e)
-            true
-        }
+        // 回调返回 false 时透传给下层 App，否则消费掉；否则触摸会落到下面的 App，
+        // 导致录入与显示不一致（回放期间则必须透传，见 createCaptureLayer 注释）。
+        root.setOnTouchListener { _, e -> onTouch(e) }
         return root
     }
 

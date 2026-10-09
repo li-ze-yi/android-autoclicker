@@ -215,6 +215,18 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                                     Toast.LENGTH_SHORT
                                 ).show()
                                 PermissionChecker.openAccessibilitySettings(context)
+                            } else if (ScriptRecorder.preciseMode.value) {
+                                // 精确模式必须由悬浮窗铺采集层；这里不能直接 start，否则什么都录不到。
+                                Toast.makeText(
+                                    context,
+                                    "当前为精确录制模式，请在悬浮窗面板中点击「开始录制」",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                if (PermissionChecker.isOverlayGranted(context)) {
+                                    OverlayService.start(context)
+                                } else {
+                                    PermissionChecker.openOverlaySettings(context)
+                                }
                             } else {
                                 ScriptRecorder.start()
                                 Toast.makeText(

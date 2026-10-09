@@ -1,6 +1,7 @@
 package com.autoclicker.core.recorder
 
 import android.graphics.Rect
+import android.content.Context
 import android.os.Build
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
@@ -41,6 +42,10 @@ import kotlinx.coroutines.withContext
 object ScriptRecorder {
 
     private const val SELF_PACKAGE = "com.autoclicker"
+
+    /** 精确模式开关的持久化位置。 */
+    private const val PREFS_NAME = "autoclicker_recorder"
+    private const val KEY_PRECISE_MODE = "precise_mode"
 
     /** 触点移动小于该距离（像素）视为未滑动。 */
     private const val TAP_SLOP_PX = 20.0
@@ -107,6 +112,9 @@ object ScriptRecorder {
     private var skipCurrent = false
     /** 当前手势起点的事件时间（ms），轨迹点的 t 相对它计算。 */
     private var gestureStartMs = 0L
+    /** 采集层窗口左上角在屏幕上的偏移：getX/getY 是窗口坐标、rawX/rawY 是屏幕坐标，两者之差即偏移。 */
+    private var windowOffsetX = 0f
+    private var windowOffsetY = 0f
     private var lastGestureEndMs = 0L
     private var pendingDelayMs = 0L
 
@@ -122,6 +130,14 @@ object ScriptRecorder {
 
     private val _stepCount = MutableStateFlow(0)
     val stepCount: StateFlow<Int> = _stepCount.asStateFlow()
+
+    /**
+     * 非精确模式下收到的无障碍事件计数（诊断用）。
+     * 录制中若它长期为 0，说明无障碍服务根本没把事件送进来；若持续增长却没产生步骤，
+     * 说明事件类型不在录制范围内。
+     */
+    private val _accessibilityEventCount = MutableStateFlow(0)
+    val accessibilityEventCount: StateFlow<Int> = _accessibilityEventCount.asStateFlow()
 
     private val _preciseMode = MutableStateFlow(false)
 
@@ -146,12 +162,29 @@ object ScriptRecorder {
     @Volatile
     var ignoredRegion: Rect? = null
 
+    /** 应用上下文，仅用于持久化精确模式开关（见 [initialize]）。 */
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 由 Application.onCreate 调用：恢复持久化的精确模式开关。 */
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        _preciseMode.value = prefs()?.getBoolean(KEY_PRECISE_MODE, false) ?: false
+    }
+
     /**
-     * 设置是否启用精确录制模式。由用户选择决定，切换时不影响进行中的录制缓冲与手势状态。
+     * 设置是否启用精确录制模式，并持久化（避免"以为关了其实还开着"导致普通模式录不到东西）。
      */
     fun setPreciseMode(enabled: Boolean) {
         _preciseMode.value = enabled
+        try {
+            prefs()?.edit()?.putBoolean(KEY_PRECISE_MODE, enabled)?.apply()
+        } catch (e: Exception) {
+            // 忽略写入异常
+        }
     }
+
+    private fun prefs() = appContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
      * 设置录制暂停状态。暂停时采集层手势既不记录也不回放；恢复前会重置进行中的手势状态，
@@ -174,6 +207,7 @@ object ScriptRecorder {
         _recordPaused.value = false
         _isRecording.value = true
         _stepCount.value = 0
+        _accessibilityEventCount.value = 0
     }
 
     /** 结束录制并返回生成的脚本（不落盘）；未在录制返回 null；缓冲为空返回 null。 */
@@ -205,6 +239,7 @@ object ScriptRecorder {
         _recordPaused.value = false
         _isRecording.value = false
         _stepCount.value = 0
+        _accessibilityEventCount.value = 0
     }
 
     /** 重置采集层手势状态机，避免残留的半程手势影响下一次记录或回放。 */
@@ -226,14 +261,26 @@ object ScriptRecorder {
     /**
      * 采集层触摸入口：记录手势（含与上一动作的间隔），并在抬手后回放给目标 App。
      *
-     * 由覆盖在屏幕上的全屏可触摸采集层调用。未在录制、已暂停或落在 [ignoredRegion] 内的手势
-     * 既不记录也不回放。记录与回放共用 [handleTouch] 状态机，保证判定与坐标一致。
+     * 返回 **true = 采集层消费该事件**；返回 **false = 不消费，让事件透传给下层 App**。
+     * 以下情况必须返回 false：
+     * - 未在录制 / 已暂停：无事可做，应让用户正常操作目标 App；
+     * - **正在回放注入的手势**：否则注入的手势会被采集层再次拦下、重复录入并再次回放，
+     *   形成指数级级联（表现为"只点了一下却录进很多步"）。这里用 in-flight 计数同步判定，
+     *   不依赖窗口 flag 是否已生效。
      */
-    fun onCaptureTouch(event: MotionEvent) {
-        if (!recording) return
-        if (_recordPaused.value) return
+    fun onCaptureTouch(event: MotionEvent): Boolean {
+        if (!recording) return false
+        if (_recordPaused.value) return false
+        if (replayInFlight.get() > 0) return false
         handleTouch(event, replay = true)
+        return true
     }
+
+    /** 触摸点 → 屏幕绝对 X（窗口坐标 + 采集层窗口偏移）。 */
+    private fun screenX(event: MotionEvent, index: Int): Float = event.getX(index) + windowOffsetX
+
+    /** 触摸点 → 屏幕绝对 Y（窗口坐标 + 采集层窗口偏移）。 */
+    private fun screenY(event: MotionEvent, index: Int): Float = event.getY(index) + windowOffsetY
 
     /**
      * 触点状态机（采集层使用）。
@@ -246,8 +293,8 @@ object ScriptRecorder {
      * 动作间隔取 `event.eventTime - lastGestureEndMs` 并上限 [MAX_DELAY_MS]；落在 [ignoredRegion]
      * 内的手势整体忽略。[replay] 为 true 时（采集层路径）在抬手后异步把同款手势回放给目标 App。
      *
-     * 坐标取 `getX(pointerIndex)/getY(pointerIndex)`：采集层是全屏且位于屏幕左上角的窗口，
-     * 视图坐标即屏幕坐标；`rawX/rawY` 只返回 0 号手指，多指场景不可用。
+     * 坐标一律换算成**屏幕绝对坐标**：`getX/getY` 是相对采集层窗口的坐标，先减去 `rawX/rawY`
+     * （屏幕坐标）得到窗口偏移，再逐点加回去，避免窗口被状态栏 inset 导致的整体偏移。
      */
     private fun handleTouch(event: MotionEvent, replay: Boolean) {
         when (event.actionMasked) {
@@ -261,8 +308,11 @@ object ScriptRecorder {
                 } else {
                     0L
                 }
-                val x = event.getX(0)
-                val y = event.getY(0)
+                // 先算出采集层窗口在屏幕上的偏移，之后所有触摸点都换算成屏幕绝对坐标。
+                windowOffsetX = event.rawX - event.getX(0)
+                windowOffsetY = event.rawY - event.getY(0)
+                val x = screenX(event, 0)
+                val y = screenY(event, 0)
                 skipCurrent = ignoredRegion?.contains(x.toInt(), y.toInt()) == true
                 appendPoint(event.getPointerId(0), x, y, 0L, force = true)
             }
@@ -272,8 +322,8 @@ object ScriptRecorder {
                     val index = event.actionIndex
                     appendPoint(
                         event.getPointerId(index),
-                        event.getX(index),
-                        event.getY(index),
+                        screenX(event, index),
+                        screenY(event, index),
                         event.eventTime - gestureStartMs,
                         force = true
                     )
@@ -284,7 +334,7 @@ object ScriptRecorder {
                 if (tracking) {
                     val t = event.eventTime - gestureStartMs
                     for (i in 0 until event.pointerCount) {
-                        appendPoint(event.getPointerId(i), event.getX(i), event.getY(i), t)
+                        appendPoint(event.getPointerId(i), screenX(event, i), screenY(event, i), t)
                     }
                 }
             }
@@ -295,8 +345,8 @@ object ScriptRecorder {
                     // 该指抬起：记录末点，其余手指继续。
                     appendPoint(
                         event.getPointerId(index),
-                        event.getX(index),
-                        event.getY(index),
+                        screenX(event, index),
+                        screenY(event, index),
                         event.eventTime - gestureStartMs,
                         force = true
                     )
@@ -307,8 +357,8 @@ object ScriptRecorder {
                 if (!tracking) return
                 appendPoint(
                     event.getPointerId(event.actionIndex),
-                    event.getX(event.actionIndex),
-                    event.getY(event.actionIndex),
+                    screenX(event, event.actionIndex),
+                    screenY(event, event.actionIndex),
                     event.eventTime - gestureStartMs,
                     force = true
                 )
@@ -476,6 +526,7 @@ object ScriptRecorder {
         if (preciseMode.value) return
         if (!recording) return
         if (event == null) return
+        _accessibilityEventCount.value = _accessibilityEventCount.value + 1
         if (event.packageName?.toString() == SELF_PACKAGE) return
 
         when (event.eventType) {
