@@ -549,7 +549,12 @@ internal object ClickerOverlay {
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
-        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+        // SOFT_INPUT_ADJUST_RESIZE 自 API 30 起被标记废弃，官方替代（setDecorFitsSystemWindows +
+        // IME insets 监听）面向 Activity 窗口，对 TYPE_APPLICATION_OVERLAY 悬浮窗不适用；
+        // 本项目 targetSdk<35，该常量在现役系统上仍生效，故保留并抑制警告。
+        @Suppress("DEPRECATION")
+        val adjustResize = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        params.softInputMode = adjustResize or
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         params.x = ((metrics.widthPixels - width) / 2).coerceAtLeast(0)
         params.y = y

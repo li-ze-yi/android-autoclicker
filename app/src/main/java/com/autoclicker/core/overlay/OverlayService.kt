@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.autoclicker.MainActivity
 import com.autoclicker.R
@@ -269,7 +270,7 @@ class OverlayService : Service() {
         // 悬浮窗权限兜底：未授权则跳转授权页并退出（已 startForeground，故先 stopForeground）。
         if (!PermissionChecker.isOverlayGranted(this)) {
             PermissionChecker.openOverlaySettings(this)
-            stopForeground(true)
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return Service.START_NOT_STICKY
         }
@@ -279,7 +280,7 @@ class OverlayService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 hideAll()
-                stopForeground(true)
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 isRunning = false
             }

@@ -27,6 +27,9 @@ private val LightColorScheme = lightColorScheme(
     tertiary = Pink40
 )
 
+// statusBarColor 自 Android 15（API 35）起已完全失效，官方迁移路径是 enableEdgeToEdge() 边到边布局；
+// 本项目 targetSdk<35，仍希望低版本保留主题色状态栏，故保留该赋值并在此抑制废弃警告。
+@Suppress("DEPRECATION")
 @Composable
 fun AutoClickerTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
