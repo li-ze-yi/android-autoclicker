@@ -153,6 +153,15 @@ object ScriptRunner {
                         totalLoops
                     )
 
+                    val stepDelay = if (step.delayBeforeMs > 0L) {
+                        jitterDelay(step.delayBeforeMs, script.jitterDelayPercent)
+                    } else {
+                        0L
+                    }
+                    if (stepDelay > 0L) {
+                        awaitInterruptible(stepDelay)
+                    }
+
                     val result = executeStep(script, step)
                     if (!result.success && script.stopOnError) {
                         _state.value = RunnerState.Finished(

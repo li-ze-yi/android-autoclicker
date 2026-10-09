@@ -13,29 +13,31 @@ enum class OnTimeout { STOP, SKIP }
 sealed class Step {
     abstract val id: String
     abstract val note: String
+    abstract val delayBeforeMs: Long
 
     @Serializable @SerialName("tap")
-    data class Tap(override val id: String = newId(), override val note: String = "", val x: Float, val y: Float) : Step()
+    data class Tap(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val x: Float, val y: Float) : Step()
 
     @Serializable @SerialName("long_press")
-    data class LongPress(override val id: String = newId(), override val note: String = "", val x: Float, val y: Float, val durationMs: Long = 800L) : Step()
+    data class LongPress(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val x: Float, val y: Float, val durationMs: Long = 800L) : Step()
 
     @Serializable @SerialName("swipe")
-    data class Swipe(override val id: String = newId(), override val note: String = "", val x1: Float, val y1: Float, val x2: Float, val y2: Float, val durationMs: Long = 300L) : Step()
+    data class Swipe(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val x1: Float, val y1: Float, val x2: Float, val y2: Float, val durationMs: Long = 300L) : Step()
 
     @Serializable @SerialName("input")
-    data class Input(override val id: String = newId(), override val note: String = "", val text: String) : Step()
+    data class Input(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val text: String) : Step()
 
     @Serializable @SerialName("wait")
-    data class Wait(override val id: String = newId(), override val note: String = "", val durationMs: Long = 1000L) : Step()
+    data class Wait(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val durationMs: Long = 1000L) : Step()
 
     @Serializable @SerialName("launch_app")
-    data class LaunchApp(override val id: String = newId(), override val note: String = "", val packageName: String) : Step()
+    data class LaunchApp(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L, val packageName: String) : Step()
 
     @Serializable @SerialName("wait_element")
     data class WaitForElement(
         override val id: String = newId(),
         override val note: String = "",
+        override val delayBeforeMs: Long = 0L,
         val text: String? = null,
         val viewId: String? = null,
         val contentDesc: String? = null,
@@ -45,15 +47,16 @@ sealed class Step {
     ) : Step()
 
     @Serializable @SerialName("back")
-    data class Back(override val id: String = newId(), override val note: String = "") : Step()
+    data class Back(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L) : Step()
 
     @Serializable @SerialName("home")
-    data class Home(override val id: String = newId(), override val note: String = "") : Step()
+    data class Home(override val id: String = newId(), override val note: String = "", override val delayBeforeMs: Long = 0L) : Step()
 
     @Serializable @SerialName("burst")
     data class Burst(
         override val id: String = newId(),
         override val note: String = "",
+        override val delayBeforeMs: Long = 0L,
         val x: Float,
         val y: Float,
         val count: Int = 10,
@@ -65,6 +68,7 @@ sealed class Step {
     data class TapElement(
         override val id: String = newId(),
         override val note: String = "",
+        override val delayBeforeMs: Long = 0L,
         val text: String? = null,
         val viewId: String? = null,
         val contentDesc: String? = null,
@@ -78,6 +82,7 @@ sealed class Step {
     data class ImageTap(
         override val id: String = newId(),
         override val note: String = "",
+        override val delayBeforeMs: Long = 0L,
         val templateId: String,
         val thresholdPercent: Int = 85,
         val regionLeft: Int = 0,
@@ -94,6 +99,7 @@ sealed class Step {
     data class ColorTap(
         override val id: String = newId(),
         override val note: String = "",
+        override val delayBeforeMs: Long = 0L,
         val color: Int,
         val tolerance: Int = 20,
         val regionLeft: Int = 0,
@@ -136,20 +142,24 @@ val Step.typeLabel: String
  * 否则表示以 (regionLeft, regionTop) 为左上角、宽 regionWidth、高 regionHeight 的矩形区域。
  */
 fun Step.describe(): String = when (this) {
-    is Step.Tap -> "点击 (${x.fmt()}, ${y.fmt()})"
-    is Step.LongPress -> "长按 (${x.fmt()}, ${y.fmt()}) ${durationMs}ms"
-    is Step.Swipe -> "滑动 (${x1.fmt()},${y1.fmt()}) → (${x2.fmt()},${y2.fmt()}) ${durationMs}ms"
-    is Step.Input -> "输入 \"$text\""
-    is Step.Wait -> "等待 ${durationMs}ms"
-    is Step.LaunchApp -> "启动应用 $packageName"
-    is Step.WaitForElement -> "等待元素 ${selectorSummary()} 超时${timeoutMs}ms"
-    is Step.Back -> "返回键"
-    is Step.Home -> "主页键"
-    is Step.Burst -> "连点 (${x.fmt()}, ${y.fmt()}) ×$count 间隔${intervalMs}ms"
-    is Step.TapElement -> "智能定位 ${selectorSummary()} 超时${timeoutMs}ms"
-    is Step.ImageTap -> "识图 模板=$templateId 阈值${thresholdPercent}% 超时${timeoutMs}ms"
-    is Step.ColorTap -> "识色 ${formatColor(color)} 容差$tolerance 超时${timeoutMs}ms"
+    is Step.Tap -> "点击 (${x.fmt()}, ${y.fmt()})".withDelay(delayBeforeMs)
+    is Step.LongPress -> "长按 (${x.fmt()}, ${y.fmt()}) ${durationMs}ms".withDelay(delayBeforeMs)
+    is Step.Swipe -> "滑动 (${x1.fmt()},${y1.fmt()}) → (${x2.fmt()},${y2.fmt()}) ${durationMs}ms".withDelay(delayBeforeMs)
+    is Step.Input -> "输入 \"$text\"".withDelay(delayBeforeMs)
+    is Step.Wait -> "等待 ${durationMs}ms".withDelay(delayBeforeMs)
+    is Step.LaunchApp -> "启动应用 $packageName".withDelay(delayBeforeMs)
+    is Step.WaitForElement -> "等待元素 ${selectorSummary()} 超时${timeoutMs}ms".withDelay(delayBeforeMs)
+    is Step.Back -> "返回键".withDelay(delayBeforeMs)
+    is Step.Home -> "主页键".withDelay(delayBeforeMs)
+    is Step.Burst -> "连点 (${x.fmt()}, ${y.fmt()}) ×$count 间隔${intervalMs}ms".withDelay(delayBeforeMs)
+    is Step.TapElement -> "智能定位 ${selectorSummary()} 超时${timeoutMs}ms".withDelay(delayBeforeMs)
+    is Step.ImageTap -> "识图 模板=$templateId 阈值${thresholdPercent}% 超时${timeoutMs}ms".withDelay(delayBeforeMs)
+    is Step.ColorTap -> "识色 ${formatColor(color)} 容差$tolerance 超时${timeoutMs}ms".withDelay(delayBeforeMs)
 }
+
+/** 摘要统一追加本步执行前的延时信息；delayMs <= 0 时保持原样。 */
+private fun String.withDelay(delayMs: Long): String =
+    if (delayMs > 0L) "$this 延时${delayMs}ms" else this
 
 private fun formatColor(color: Int): String = "#%06X".format(Locale.US, color and 0xFFFFFF)
 

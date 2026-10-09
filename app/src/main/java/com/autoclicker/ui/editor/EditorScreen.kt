@@ -540,6 +540,7 @@ private fun StepEditDialog(
     val scope = rememberCoroutineScope()
     val templateRepo = remember { ImageTemplateRepository.get(context) }
     var note by remember(step.id) { mutableStateOf(step.note) }
+    var delayText by remember(step.id) { mutableStateOf(step.delayBeforeMs.toString()) }
     var xStr by remember(step.id) { mutableStateOf(initialX(step)) }
     var yStr by remember(step.id) { mutableStateOf(initialY(step)) }
     var x1Str by remember(step.id) { mutableStateOf(initialX1(step)) }
@@ -1162,6 +1163,19 @@ private fun StepEditDialog(
                 }
 
                 OutlinedTextField(
+                    value = delayText,
+                    onValueChange = { delayText = it },
+                    label = { Text("延时(ms)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = NumberKeyboard
+                )
+                Text(
+                    "执行本步前先等待",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("备注（可选）") },
@@ -1180,6 +1194,7 @@ private fun StepEditDialog(
         confirmButton = {
             TextButton(onClick = {
                 error = null
+                val parsedDelay = delayText.trim().toLongOrNull()?.coerceAtLeast(0L) ?: 0L
                 when (step) {
                     is Step.Tap -> {
                         val x = xStr.trim().toFloatOrNull()
@@ -1187,7 +1202,15 @@ private fun StepEditDialog(
                         if (x == null || y == null) {
                             error = "请输入有效的 X、Y 坐标"
                         } else {
-                            onConfirm(Step.Tap(id = step.id, note = note, x = x, y = y))
+                            onConfirm(
+                                Step.Tap(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    x = x,
+                                    y = y
+                                )
+                            )
                         }
                     }
 
@@ -1199,7 +1222,14 @@ private fun StepEditDialog(
                             error = "请检查坐标与时长"
                         } else {
                             onConfirm(
-                                Step.LongPress(id = step.id, note = note, x = x, y = y, durationMs = d)
+                                Step.LongPress(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    x = x,
+                                    y = y,
+                                    durationMs = d
+                                )
                             )
                         }
                     }
@@ -1217,6 +1247,7 @@ private fun StepEditDialog(
                                 Step.Swipe(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     x1 = x1,
                                     y1 = y1,
                                     x2 = x2,
@@ -1227,14 +1258,23 @@ private fun StepEditDialog(
                         }
                     }
 
-                    is Step.Input -> onConfirm(Step.Input(id = step.id, note = note, text = textStr))
+                    is Step.Input -> onConfirm(
+                        Step.Input(id = step.id, note = note, delayBeforeMs = parsedDelay, text = textStr)
+                    )
 
                     is Step.Wait -> {
                         val d = durationStr.trim().toLongOrNull()
                         if (d == null) {
                             error = "请输入有效的时长"
                         } else {
-                            onConfirm(Step.Wait(id = step.id, note = note, durationMs = d))
+                            onConfirm(
+                                Step.Wait(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    durationMs = d
+                                )
+                            )
                         }
                     }
 
@@ -1246,6 +1286,7 @@ private fun StepEditDialog(
                                 Step.LaunchApp(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     packageName = pkgStr.trim()
                                 )
                             )
@@ -1261,6 +1302,7 @@ private fun StepEditDialog(
                                 Step.WaitForElement(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     text = textStr.ifBlank { null },
                                     viewId = viewIdStr.ifBlank { null },
                                     contentDesc = descStr.ifBlank { null },
@@ -1272,9 +1314,13 @@ private fun StepEditDialog(
                         }
                     }
 
-                    is Step.Back -> onConfirm(Step.Back(id = step.id, note = note))
+                    is Step.Back -> onConfirm(
+                        Step.Back(id = step.id, note = note, delayBeforeMs = parsedDelay)
+                    )
 
-                    is Step.Home -> onConfirm(Step.Home(id = step.id, note = note))
+                    is Step.Home -> onConfirm(
+                        Step.Home(id = step.id, note = note, delayBeforeMs = parsedDelay)
+                    )
 
                     is Step.Burst -> {
                         val x = xStr.trim().toFloatOrNull()
@@ -1289,6 +1335,7 @@ private fun StepEditDialog(
                                 Step.Burst(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     x = x,
                                     y = y,
                                     count = c,
@@ -1309,6 +1356,7 @@ private fun StepEditDialog(
                                 Step.TapElement(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     text = textStr.ifBlank { null },
                                     viewId = viewIdStr.ifBlank { null },
                                     contentDesc = descStr.ifBlank { null },
@@ -1341,6 +1389,7 @@ private fun StepEditDialog(
                                 Step.ImageTap(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     templateId = templateId,
                                     thresholdPercent = th,
                                     regionLeft = rl,
@@ -1377,6 +1426,7 @@ private fun StepEditDialog(
                                 Step.ColorTap(
                                     id = step.id,
                                     note = note,
+                                    delayBeforeMs = parsedDelay,
                                     color = color,
                                     tolerance = tol,
                                     regionLeft = rl,

@@ -8,9 +8,9 @@ import org.junit.Test
 class ScriptSerializationTest {
 
     private fun allStepTypes(): List<Step> = listOf(
-        Step.Tap(id = "s1", note = "n1", x = 120f, y = 800f),
+        Step.Tap(id = "s1", note = "n1", delayBeforeMs = 350L, x = 120f, y = 800f),
         Step.LongPress(id = "s2", note = "n2", x = 10f, y = 20f, durationMs = 900L),
-        Step.Swipe(id = "s3", note = "n3", x1 = 100f, y1 = 900f, x2 = 100f, y2 = 300f, durationMs = 300L),
+        Step.Swipe(id = "s3", note = "n3", delayBeforeMs = 1200L, x1 = 100f, y1 = 900f, x2 = 100f, y2 = 300f, durationMs = 300L),
         Step.Input(id = "s4", note = "n4", text = "你好"),
         Step.Wait(id = "s5", note = "n5", durationMs = 1000L),
         Step.LaunchApp(id = "s6", note = "n6", packageName = "com.tencent.mm"),
@@ -63,6 +63,7 @@ class ScriptSerializationTest {
         Step.ColorTap(
             id = "s13",
             note = "n13",
+            delayBeforeMs = 80L,
             color = 0xFFFF0000.toInt(),
             tolerance = 25,
             regionLeft = 10,
@@ -208,5 +209,47 @@ class ScriptSerializationTest {
         assertEquals(0L, decoded.loopIntervalMs)
         assertEquals(0, decoded.jitterRadiusPx)
         assertEquals(0, decoded.jitterDelayPercent)
+    }
+
+    @Test
+    fun testDelayBeforeMsRoundTrip() {
+        val step = Step.Tap(id = "delay-1", note = "延时", delayBeforeMs = 2500L, x = 5f, y = 6f)
+
+        val text = ScriptSerializer.encode(
+            Script(id = "script-delay", name = "延时往返", steps = listOf(step))
+        )
+
+        assertTrue(text.contains("delayBeforeMs"))
+
+        val decoded = ScriptSerializer.decode(text)
+        val decodedStep = decoded.steps.single() as Step.Tap
+        assertEquals(2500L, decodedStep.delayBeforeMs)
+    }
+
+    @Test
+    fun testDelayDefaultsToZero() {
+        val text = """
+            {
+              "id": "script-legacy-step",
+              "name": "旧步骤无延时",
+              "steps": [
+                {
+                  "type": "tap",
+                  "id": "legacy-1",
+                  "note": "旧",
+                  "x": 1.0,
+                  "y": 2.0
+                }
+              ],
+              "stopOnError": true,
+              "createdAt": 1,
+              "updatedAt": 2
+            }
+        """.trimIndent()
+
+        val decoded = ScriptSerializer.decode(text)
+
+        val step = decoded.steps.single() as Step.Tap
+        assertEquals(0L, step.delayBeforeMs)
     }
 }

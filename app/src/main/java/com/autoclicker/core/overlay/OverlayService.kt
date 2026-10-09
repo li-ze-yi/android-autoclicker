@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.IBinder
 import android.view.Gravity
 import android.view.MotionEvent
@@ -96,6 +97,7 @@ class OverlayService : Service() {
     private var ballView: View? = null
     private var ballParams: WindowManager.LayoutParams? = null
     private var panelView: View? = null
+    private var panelParams: WindowManager.LayoutParams? = null
     private var pickView: View? = null
     private var subscribed = false
     private var editorShowing = false
@@ -105,7 +107,16 @@ class OverlayService : Service() {
         override fun onPauseClick() = ScriptRunner.pause()
         override fun onResumeClick() = ScriptRunner.resume()
         override fun onStopClick() = ScriptRunner.stop()
-        override fun onStartRecord() = ScriptRecorder.start()
+        override fun onStartRecord() {
+            if (!AutoAccessService.isConnected) {
+                toast("请先在无障碍设置中开启服务，再开始录制")
+                PermissionChecker.openAccessibilitySettings(this@OverlayService)
+                return
+            }
+            updateRecorderIgnoredRegion()
+            ScriptRecorder.start()
+            toast("录制已开始，请切到目标 App 操作")
+        }
         override fun onStopRecord() = finishRecording()
         override fun onRefreshScripts() = refreshScripts()
         override fun onOpenApp() = openApp()
@@ -212,6 +223,7 @@ class OverlayService : Service() {
         if (!addView(view, params)) return
         ballView = view
         ballParams = params
+        updateRecorderIgnoredRegion()
     }
 
     private fun attachBallTouch(view: View, params: WindowManager.LayoutParams) {
@@ -250,6 +262,7 @@ class OverlayService : Service() {
 
                 MotionEvent.ACTION_UP -> {
                     if (!dragged) togglePanel()
+                    updateRecorderIgnoredRegion()
                     true
                 }
 
@@ -262,6 +275,8 @@ class OverlayService : Service() {
         if (panelView != null) {
             removeView(panelView)
             panelView = null
+            panelParams = null
+            updateRecorderIgnoredRegion()
         } else {
             showPanel()
         }
@@ -285,8 +300,10 @@ class OverlayService : Service() {
 
         if (!addView(view, params)) return
         panelView = view
+        panelParams = params
         refreshScripts()
         updateStatus()
+        updateRecorderIgnoredRegion()
     }
 
     // ---- 坐标拾取 ----
@@ -334,13 +351,45 @@ class OverlayService : Service() {
 
     private fun finishRecording() {
         val script = ScriptRecorder.stop()
+        ScriptRecorder.ignoredRegion = null
         if (script == null) {
-            toast("未录制到任何操作")
+            toast("未录制到任何操作（请确认已开启无障碍服务，并在目标 App 中操作）")
             return
         }
         ScriptRepository.get(this).save(script)
         toast("已保存脚本：${script.name}")
         refreshScripts()
+    }
+
+    /** 重新计算并写入录制忽略区（悬浮球与面板的屏幕矩形并集），避免录到自身点击。 */
+    private fun updateRecorderIgnoredRegion() {
+        try {
+            val ball = ballParams
+            val ballRect = if (ball != null) {
+                Rect(ball.x, ball.y, ball.x + ball.width, ball.y + ball.height)
+            } else {
+                null
+            }
+
+            val panel = panelParams
+            val panelRect = if (panel != null) {
+                // 面板高度为 WRAP_CONTENT，优先用实测高度，未测量时退回参数值。
+                val measured = panelView?.height ?: 0
+                val height = if (measured > 0) measured else panel.height
+                Rect(panel.x, panel.y, panel.x + panel.width, panel.y + height)
+            } else {
+                null
+            }
+
+            ScriptRecorder.ignoredRegion = when {
+                ballRect != null && panelRect != null -> Rect(ballRect).apply { union(panelRect) }
+                ballRect != null -> ballRect
+                panelRect != null -> panelRect
+                else -> null
+            }
+        } catch (e: Exception) {
+            ScriptRecorder.ignoredRegion = null
+        }
     }
 
     private fun refreshScripts() {
@@ -483,6 +532,7 @@ class OverlayService : Service() {
         ballParams = null
         removeView(panelView)
         panelView = null
+        panelParams = null
         removeView(pickView)
         pickView = null
     }
