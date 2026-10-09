@@ -52,6 +52,7 @@ internal object OverlayUi {
         fun onDeleteStep(script: Script?, index: Int)
         fun onDuplicateStep(script: Script?, index: Int)
         fun onCaptureTemplate()
+        fun onOpenClicker()
     }
 
     /** 直径 48dp 的圆形悬浮球。 */
@@ -166,6 +167,12 @@ internal object OverlayUi {
             button(context, "关闭") { callbacks.onCloseOverlay() }
         )
         addRow(context, root, row3)
+
+        val row4 = row(
+            context,
+            button(context, "点击器模式") { callbacks.onOpenClicker() }
+        )
+        addRow(context, root, row4)
 
         setScripts(root, emptyList())
         return root

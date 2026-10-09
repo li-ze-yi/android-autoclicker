@@ -20,6 +20,10 @@ import androidx.core.content.ContextCompat
 import com.autoclicker.MainActivity
 import com.autoclicker.R
 import com.autoclicker.core.accessibility.AutoAccessService
+import com.autoclicker.core.clicker.ClickerConfig
+import com.autoclicker.core.clicker.ClickerEngine
+import com.autoclicker.core.clicker.ClickerExporter
+import com.autoclicker.core.clicker.ClickerPoint
 import com.autoclicker.core.recorder.ScriptRecorder
 import com.autoclicker.core.runner.RunnerState
 import com.autoclicker.core.runner.ScriptRunner
@@ -31,6 +35,9 @@ import com.autoclicker.core.util.PermissionChecker
 import com.autoclicker.core.vision.CapturePermissionActivity
 import com.autoclicker.core.vision.ScreenCaptureService
 import com.autoclicker.core.vision.VisionBridge
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +109,12 @@ class OverlayService : Service() {
     private var subscribed = false
     private var editorShowing = false
 
+    private var markerView: View? = null
+    private var markerParams: WindowManager.LayoutParams? = null
+    private var controlBarView: View? = null
+    private var controlBarParams: WindowManager.LayoutParams? = null
+    private var clickerSubscribed = false
+
     private val panelCallbacks = object : OverlayUi.PanelCallbacks {
         override fun onStartClick(script: Script?) = startScript(script)
         override fun onPauseClick() = ScriptRunner.pause()
@@ -127,6 +140,72 @@ class OverlayService : Service() {
         override fun onDeleteStep(script: Script?, index: Int) = deleteStep(script, index)
         override fun onDuplicateStep(script: Script?, index: Int) = duplicateStep(script, index)
         override fun onCaptureTemplate() = captureTemplate()
+        override fun onOpenClicker() = showClicker()
+    }
+
+    private val clickerCallbacks = object : ClickerOverlay.Callbacks {
+        override fun onAddPoint(x: Float, y: Float) {
+            ClickerEngine.addPoint(x, y)
+        }
+
+        override fun onMovePoint(id: String, x: Float, y: Float) {
+            val point = ClickerEngine.config.value.points.firstOrNull { it.id == id } ?: return
+            ClickerEngine.updatePoint(
+                point.copy(x = x.coerceAtLeast(0f), y = y.coerceAtLeast(0f))
+            )
+        }
+
+        override fun onEditPoint(point: ClickerPoint) {
+            ClickerOverlay.showPointEditor(
+                this@OverlayService,
+                windowManager,
+                point,
+                onConfirm = { ClickerEngine.updatePoint(it) },
+                onDelete = { ClickerEngine.removePoint(point.id) }
+            )
+        }
+
+        override fun onStartClicker() {
+            if (!AutoAccessService.isConnected) {
+                toast("请先在无障碍设置中开启服务")
+                PermissionChecker.openAccessibilitySettings(this@OverlayService)
+                return
+            }
+            if (!ClickerEngine.start()) {
+                toast("启动失败：请先添加点击点")
+            }
+        }
+
+        override fun onStopClicker() = ClickerEngine.stop()
+
+        override fun onClearPoints() {
+            ClickerEngine.clearPoints()
+            toast("已清空点击点")
+        }
+
+        override fun onLoopSettings(config: ClickerConfig) {
+            ClickerOverlay.showLoopSettings(this@OverlayService, windowManager, config) { inf, cnt, iv ->
+                ClickerEngine.updateLoop(inf, cnt, iv)
+            }
+        }
+
+        override fun onExportScript() {
+            val cfg = ClickerEngine.config.value
+            if (cfg.points.isEmpty()) {
+                toast("请先添加点击点")
+                return
+            }
+            val name = "点击器 " + SimpleDateFormat(
+                "MM-dd HH:mm",
+                Locale.getDefault()
+            ).format(Date())
+            val script = ClickerExporter.toScript(cfg, name)
+            ScriptRepository.get(this@OverlayService).save(script)
+            toast("已保存脚本：${script.name}")
+            refreshScripts()
+        }
+
+        override fun onExitClicker() = hideClicker()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -332,6 +411,124 @@ class OverlayService : Service() {
         }
     }
 
+    // ---- 点击器模式 ----
+
+    /** 打开点击器模式：显示全屏标记层与底部控制条。 */
+    private fun showClicker() {
+        if (ScriptRunner.isRunning) {
+            toast("请先停止正在运行的脚本")
+            return
+        }
+        ClickerEngine.attach(this)
+
+        // 面板若开着先关掉，避免遮挡标记层。
+        if (panelView != null) {
+            removeView(panelView)
+            panelView = null
+            panelParams = null
+        }
+
+        if (markerView == null) {
+            val view = ClickerOverlay.createMarkerLayer(this, clickerCallbacks)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.TOP or Gravity.START
+            if (addView(view, params)) {
+                markerView = view
+                markerParams = params
+            }
+        }
+
+        if (controlBarView == null) {
+            val view = ClickerOverlay.createControlBar(this, clickerCallbacks)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.BOTTOM or Gravity.START
+            params.y = OverlayUi.dp(this, 8f)
+            if (addView(view, params)) {
+                controlBarView = view
+                controlBarParams = params
+            }
+        }
+
+        val cfg = ClickerEngine.config.value
+        markerView?.let { ClickerOverlay.setPoints(it, cfg.points) }
+        controlBarView?.let { ClickerOverlay.setConfig(it, cfg) }
+        refreshClickerStatus()
+        subscribeClickerState()
+    }
+
+    /** 订阅点击器配置与状态流（防重复订阅）。 */
+    private fun subscribeClickerState() {
+        if (clickerSubscribed) return
+        clickerSubscribed = true
+        scope.launch {
+            ClickerEngine.config.collect { cfg ->
+                markerView?.let { ClickerOverlay.setPoints(it, cfg.points) }
+                controlBarView?.let { ClickerOverlay.setConfig(it, cfg) }
+                refreshClickerStatus()
+            }
+        }
+        scope.launch {
+            ClickerEngine.state.collect { st ->
+                refreshClickerStatus()
+                controlBarView?.let { ClickerOverlay.setRunning(it, st.isRunning) }
+                setMarkerTouchable(!st.isRunning)
+            }
+        }
+    }
+
+    /** 用当前状态与配置刷新控制条状态文字。 */
+    private fun refreshClickerStatus() {
+        val bar = controlBarView ?: return
+        val cfg = ClickerEngine.config.value
+        ClickerOverlay.setStatus(
+            bar,
+            ClickerOverlay.formatStatus(ClickerEngine.state.value, cfg.points.size, cfg)
+        )
+    }
+
+    /**
+     * 切换标记层是否可触摸。运行态必须设为不可触摸，否则 dispatchGesture
+     * 派发的点击会落在我们自己的覆盖层上，目标 App 收不到。
+     */
+    private fun setMarkerTouchable(touchable: Boolean) {
+        val view = markerView ?: return
+        val params = markerParams ?: return
+        try {
+            params.flags = if (touchable) {
+                params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            // 窗口失效时忽略
+        }
+    }
+
+    /** 关闭点击器模式并移除相关视图。 */
+    private fun hideClicker() {
+        ClickerEngine.stop()
+        ClickerOverlay.hideEditors(windowManager)
+        removeView(markerView)
+        markerView = null
+        markerParams = null
+        removeView(controlBarView)
+        controlBarView = null
+        controlBarParams = null
+    }
+
     // ---- 按钮逻辑 ----
 
     private fun startScript(script: Script?) {
@@ -535,6 +732,13 @@ class OverlayService : Service() {
         panelParams = null
         removeView(pickView)
         pickView = null
+        removeView(markerView)
+        markerView = null
+        markerParams = null
+        removeView(controlBarView)
+        controlBarView = null
+        controlBarParams = null
+        ClickerOverlay.hideEditors(windowManager)
     }
 
     private fun buildNotification(): Notification {
