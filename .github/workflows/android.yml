@@ -86,6 +86,16 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
+      # 固定 Debug 签名密钥：AGP 默认使用 ~/.android/debug.keystore，云端每次运行都会重新生成，
+      # 导致不同批次 APK 签名不一致、覆盖安装报「软件包与现有软件包存在冲突」。
+      # 这里用固定 key 缓存该密钥文件，首次运行生成后所有后续构建复用同一份，签名保持一致。
+      # 注意：key 不能包含 gradle 文件 hash，否则文件变动会让 key 变化、缓存未命中而重新生成密钥。
+      - name: 缓存 Debug 签名密钥
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
       - name: 构建 Debug APK
         shell: bash
         run: |
