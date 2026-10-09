@@ -19,8 +19,10 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * 录制器：把用户操作转换为脚本步骤。
  *
- * 主路径为 API 34+ 的原始触点（[onRawTouch]），可精确还原坐标、手势时长与动作间隔；
- * API < 34 时回退到无障碍事件（[onAccessibilityEvent]），坐标用控件包围盒中心近似。
+ * 当前生效的是无障碍事件路径（[onAccessibilityEvent]）：点击/长按取控件包围盒中心作为坐标，
+ * 滚动换算为近似滑动，并用系统时钟测量动作之间的间隔写入下一步的 `delayBeforeMs`。
+ * [onRawTouch] 为原始触点入口，当前无调用方（`AccessibilityService.onMotionEvent` 不在公开 SDK 中，
+ * 无法在第三方 App 内覆盖），保留以备后续接入。
  */
 object ScriptRecorder {
 
@@ -122,7 +124,7 @@ object ScriptRecorder {
         _stepCount.value = 0
     }
 
-    /** Android 14+ 的原始触点入口，由 [com.autoclicker.core.accessibility.AutoAccessService.onMotionEvent] 转发。 */
+    /** 原始触点入口。当前无调用方，保留备用（见类注释）。 */
     fun onRawTouch(event: MotionEvent) {
         if (!recording) return
 
@@ -211,14 +213,12 @@ object ScriptRecorder {
     }
 
     /**
-     * 兼容 Android 14 以下的无障碍事件入口。
-     * API 34+ 由原始触点路径处理，此处直接忽略以避免重复录入。
+     * 无障碍事件入口：录制点击、长按与滚动，并测量与上一次动作的间隔。
      */
     fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!recording) return
         if (event == null) return
         if (event.packageName?.toString() == SELF_PACKAGE) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> recordClick(event)
