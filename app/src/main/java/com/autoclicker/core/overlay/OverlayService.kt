@@ -286,9 +286,13 @@ class OverlayService : Service() {
                 isRunning = false
             }
 
-            ACTION_START_PICK -> showPickOverlay()
+            ACTION_START_PICK -> {
+                isRunning = true
+                showPickOverlay()
+            }
 
             ACTION_START_REGION_PICK -> {
+                isRunning = true
                 collapseForAutomation()
                 showRegionPickOverlay()
             }
@@ -475,9 +479,14 @@ class OverlayService : Service() {
         updateRecorderIgnoredRegion()
     }
 
-    /** 进入自动化类操作前自动收起面板，避免遮挡目标 App。 */
+    /**
+     * 进入自动化类操作前自动收起面板，只保留悬浮小球。
+     *
+     * 迷你条是横跨屏幕顶部的可触摸窗口，会截走 `dispatchGesture` 注入的点击，
+     * 因此自动化期间一律收成小球；小球尺寸很小且用于随时停止，保留其可触摸。
+     */
     private fun collapseForAutomation() {
-        if (mode == OverlayMode.PANEL) setMode(OverlayMode.MINI_BAR)
+        setMode(OverlayMode.BALL)
     }
 
     private fun removePanel() {
@@ -554,6 +563,9 @@ class OverlayService : Service() {
         captureLayerView = view
         captureLayerParams = params
 
+        // 回放注入手势期间把采集层临时设为不可触摸，避免注入手势被自己拦截再次录入。
+        ScriptRecorder.capturePassthrough = { passthrough -> setCaptureLayerPassthrough(passthrough) }
+
         // z-order：采集层是全屏且吞触摸的，必须让悬浮球与迷你条位于其之上，
         // 否则用户无法点击「结束录制」。先把控制控件移除并置空，再重新添加一次以提升层级。
         removeView(ballView)
@@ -568,9 +580,30 @@ class OverlayService : Service() {
 
     /** 移除采集层。 */
     private fun hideCaptureLayer() {
+        ScriptRecorder.capturePassthrough = null
         removeView(captureLayerView)
         captureLayerView = null
         captureLayerParams = null
+    }
+
+    /**
+     * 切换采集层是否透传触摸。透传时加 [WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE]，
+     * 让注入手势落到下方目标 App；录制态则恢复可触摸以继续采集。
+     * 必须在主线程调用（由 ScriptRecorder 通过 Dispatchers.Main 回调）。
+     */
+    private fun setCaptureLayerPassthrough(passthrough: Boolean) {
+        val view = captureLayerView ?: return
+        val params = captureLayerParams ?: return
+        try {
+            params.flags = if (passthrough) {
+                params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            } else {
+                params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            }
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            // 窗口失效时忽略
+        }
     }
 
     // ---- 坐标拾取 ----
@@ -1045,6 +1078,7 @@ class OverlayService : Service() {
         pickView = null
         removeView(regionPickView)
         regionPickView = null
+        ScriptRecorder.capturePassthrough = null
         removeView(captureLayerView)
         captureLayerView = null
         captureLayerParams = null

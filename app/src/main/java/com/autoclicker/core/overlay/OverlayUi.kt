@@ -311,13 +311,15 @@ internal object OverlayUi {
                 if (scripts.isEmpty()) {
                     holder.selectedIndex = -1
                     holder.adapter.add("（无脚本）")
+                    holder.adapter.notifyDataSetChanged()
                 } else {
                     holder.adapter.addAll(scripts.map { it.name })
                     val index = scripts.indexOfFirst { it.id == previousId }
                     holder.selectedIndex = if (index >= 0) index else 0
+                    // 先刷新数据再设置选中项，避免选中态在数据集更新前被丢弃。
+                    holder.adapter.notifyDataSetChanged()
                     holder.spinner.setSelection(holder.selectedIndex)
                 }
-                holder.adapter.notifyDataSetChanged()
             }
             is MiniBarHolder -> {
                 holder.scripts = scripts

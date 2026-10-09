@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.autoclicker.core.accessibility.GestureExecutor
 import com.autoclicker.core.accessibility.NodeFinder
 import com.autoclicker.core.script.Script
@@ -12,6 +13,7 @@ import com.autoclicker.core.script.newId
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.hypot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 录制器：把用户操作转换为脚本步骤。
@@ -69,6 +72,17 @@ object ScriptRecorder {
      * 用 [SupervisorJob] 让单次回放失败不影响后续回放。
      */
     private val replayScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * 采集层触摸透传控制器。回放注入手势前把它置为 true（采集层临时不可触摸，手势透传给目标 App），
+     * 回放结束后置回 false。若不透传，`dispatchGesture` 注入的手势会落在采集层上被再次录入，
+     * 形成"录制→回放→再录制"的自我循环。由 OverlayService 在显示/隐藏采集层时设置，参数在主线程生效。
+     */
+    @Volatile
+    var capturePassthrough: ((Boolean) -> Unit)? = null
+
+    /** 正在回放的手势计数：只有从 0→1 才开启透传、1→0 才关闭，避免并发回放提前恢复。 */
+    private val replayInFlight = AtomicInteger(0)
 
     private val buffer = mutableListOf<Step>()
     private var recording = false
@@ -315,7 +329,14 @@ object ScriptRecorder {
     private fun replayTapLike(x: Float, y: Float, durationMs: Long) {
         val safe = durationMs.coerceIn(REPLAY_MIN_DURATION_MS, MAX_DELAY_MS)
         replayScope.launch {
-            GestureExecutor.longPress(x = x, y = y, durationMs = safe)
+            try {
+                acquireCapturePassthrough()
+                GestureExecutor.longPress(x = x, y = y, durationMs = safe)
+            } catch (e: Exception) {
+                // 回放失败不影响录制
+            } finally {
+                releaseCapturePassthrough()
+            }
         }
     }
 
@@ -325,7 +346,38 @@ object ScriptRecorder {
     private fun replaySwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long) {
         val safe = durationMs.coerceIn(REPLAY_MIN_DURATION_MS, MAX_DELAY_MS)
         replayScope.launch {
-            GestureExecutor.swipe(x1 = x1, y1 = y1, x2 = x2, y2 = y2, durationMs = safe)
+            try {
+                acquireCapturePassthrough()
+                GestureExecutor.swipe(x1 = x1, y1 = y1, x2 = x2, y2 = y2, durationMs = safe)
+            } catch (e: Exception) {
+                // 回放失败不影响录制
+            } finally {
+                releaseCapturePassthrough()
+            }
+        }
+    }
+
+    /** 第一个回放开始前开启采集层透传；控制器在主线程执行。 */
+    private suspend fun acquireCapturePassthrough() {
+        if (replayInFlight.incrementAndGet() == 1) {
+            applyCapturePassthrough(true)
+        }
+    }
+
+    /** 最后一个回放结束后关闭采集层透传，恢复正常录制态。 */
+    private suspend fun releaseCapturePassthrough() {
+        if (replayInFlight.decrementAndGet() == 0) {
+            applyCapturePassthrough(false)
+        }
+    }
+
+    /** 在主线程把透传状态交给控制器；采集层已销毁等异常一律忽略。 */
+    private suspend fun applyCapturePassthrough(passthrough: Boolean) {
+        val controller = capturePassthrough ?: return
+        try {
+            withContext(Dispatchers.Main) { controller(passthrough) }
+        } catch (e: Exception) {
+            // 采集层窗口可能已销毁，忽略
         }
     }
 
@@ -368,35 +420,41 @@ object ScriptRecorder {
 
     private fun recordClick(event: AccessibilityEvent) {
         val source = event.source ?: return
-        if (!NodeFinder.isVisible(source)) return
-
-        val center = NodeFinder.centerOf(source)
-        val gap = delayFromLastEvent()
-        append(
-            Step.Tap(
-                delayBeforeMs = gap,
-                x = center.x,
-                y = center.y,
-                note = source.text?.toString() ?: ""
+        try {
+            if (!NodeFinder.isVisible(source)) return
+            val center = NodeFinder.centerOf(source)
+            val gap = delayFromLastEvent()
+            append(
+                Step.Tap(
+                    delayBeforeMs = gap,
+                    x = center.x,
+                    y = center.y,
+                    note = source.text?.toString() ?: ""
+                )
             )
-        )
+        } finally {
+            recycleQuietly(source)
+        }
     }
 
     private fun recordLongClick(event: AccessibilityEvent) {
         val source = event.source ?: return
-        if (!NodeFinder.isVisible(source)) return
-
-        val center = NodeFinder.centerOf(source)
-        val gap = delayFromLastEvent()
-        append(
-            Step.LongPress(
-                delayBeforeMs = gap,
-                x = center.x,
-                y = center.y,
-                durationMs = LONG_CLICK_DURATION_MS,
-                note = source.text?.toString() ?: ""
+        try {
+            if (!NodeFinder.isVisible(source)) return
+            val center = NodeFinder.centerOf(source)
+            val gap = delayFromLastEvent()
+            append(
+                Step.LongPress(
+                    delayBeforeMs = gap,
+                    x = center.x,
+                    y = center.y,
+                    durationMs = LONG_CLICK_DURATION_MS,
+                    note = source.text?.toString() ?: ""
+                )
             )
-        )
+        } finally {
+            recycleQuietly(source)
+        }
     }
 
     private fun recordScroll(event: AccessibilityEvent) {
@@ -404,6 +462,14 @@ object ScriptRecorder {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
 
         val source = event.source ?: return
+        try {
+            recordScrollFrom(event, source)
+        } finally {
+            recycleQuietly(source)
+        }
+    }
+
+    private fun recordScrollFrom(event: AccessibilityEvent, source: AccessibilityNodeInfo) {
         val rect = Rect().also { source.getBoundsInScreen(it) }
         if (rect.width() <= 0 || rect.height() <= 0) return
 
@@ -479,6 +545,16 @@ object ScriptRecorder {
 
         append(swipe)
         lastSwipeAt = now
+    }
+
+    /** 安全回收无障碍节点：重复回收或框架已回收时忽略异常。 */
+    @Suppress("DEPRECATION")
+    private fun recycleQuietly(node: AccessibilityNodeInfo) {
+        try {
+            node.recycle()
+        } catch (e: Exception) {
+            // 忽略回收异常
+        }
     }
 
     /** 偏移量取区域长/宽的四分之一，并限制在 [120, 400] px。 */

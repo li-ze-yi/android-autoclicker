@@ -159,6 +159,13 @@ class ScreenCaptureService : Service() {
             return Service.START_NOT_STICKY
         }
 
+        // 已在运行：忽略重复启动，复用现有投影/虚拟显示/ImageReader。
+        // 否则每次重复 start 都会新建一套并覆盖旧字段，旧的永不释放（Android 14 上
+        // 同一 MediaProjection 重复注册回调还会抛异常）。
+        if (imageReader != null) {
+            return Service.START_NOT_STICKY
+        }
+
         try {
             val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
                 ?: Activity.RESULT_CANCELED

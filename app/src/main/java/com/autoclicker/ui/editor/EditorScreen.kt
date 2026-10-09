@@ -81,6 +81,7 @@ import com.autoclicker.core.vision.ColorMatcher
 import com.autoclicker.core.vision.ImageTemplateRepository
 import com.autoclicker.core.vision.RegionPickerBridge
 import com.autoclicker.core.vision.ScreenCaptureService
+import com.autoclicker.core.vision.VisionBridge
 import com.autoclicker.core.vision.VisionSettings
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -977,16 +978,21 @@ private fun StepEditDialog(
                                         val screen = withContext(Dispatchers.IO) {
                                             ScreenCaptureService.capture(0)
                                         }
-                                        screen?.recycle()
-                                        Toast.makeText(
-                                            context,
-                                            if (screen != null) {
-                                                "截屏成功，请在「识图模板」页框选保存"
-                                            } else {
-                                                "截屏失败，请重新授权截屏"
-                                            },
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                                        if (screen != null) {
+                                            // 交给识图页框选保存，切勿在此回收：位图已转交他人使用。
+                                            VisionBridge.publishCapture(screen)
+                                            Toast.makeText(
+                                                context,
+                                                "截屏成功，请在「识图模板」页框选保存",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            Toast.makeText(
+                                                context,
+                                                "截屏失败，请重新授权截屏",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     }
                                 }
                             },

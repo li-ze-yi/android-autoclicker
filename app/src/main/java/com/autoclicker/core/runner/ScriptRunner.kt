@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.view.accessibility.AccessibilityNodeInfo
 import com.autoclicker.core.accessibility.GestureExecutor
 import com.autoclicker.core.accessibility.GlobalActions
 import com.autoclicker.core.accessibility.NodeFinder
@@ -56,6 +57,7 @@ object ScriptRunner {
     private var appContext: Context? = null
 
     /** 手动停止标记，用于在取消回调中区分「手动停止」与「其他取消」。 */
+    @Volatile
     private var stopRequested = false
 
     private val paused = MutableStateFlow(false)
@@ -250,7 +252,7 @@ object ScriptRunner {
         }
 
         is Step.Wait -> {
-            delay(jitterDelay(step.durationMs, script.jitterDelayPercent))
+            awaitInterruptible(jitterDelay(step.durationMs, script.jitterDelayPercent))
             StepResult(true, "等待完成")
         }
 
@@ -293,7 +295,8 @@ object ScriptRunner {
         return try {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
-            delay(1000)
+            // 用可中断等待替代普通 delay：暂停/停止时能立即响应。
+            awaitInterruptible(1000L)
             StepResult(true, "已启动 $packageName")
         } catch (e: CancellationException) {
             throw e
@@ -310,7 +313,9 @@ object ScriptRunner {
             className = step.className
         )
         val node = NodeFinder.awaitNode(selector, step.timeoutMs)
-        return if (node != null) {
+        val found = node != null
+        recycleNode(node)
+        return if (found) {
             delay(200)
             StepResult(true, "元素已出现")
         } else if (step.onTimeout == OnTimeout.SKIP) {
@@ -360,6 +365,7 @@ object ScriptRunner {
         val node = NodeFinder.awaitNode(selector, step.timeoutMs)
             ?: return timeoutResult(step.onTimeout, "智能定位超时")
         val center = NodeFinder.centerOf(node)
+        recycleNode(node)
         val x = jitterCoordinate(center.x, script.jitterRadiusPx)
         val y = jitterCoordinate(center.y, script.jitterRadiusPx)
         return if (GestureExecutor.click(x, y)) {
@@ -476,6 +482,16 @@ object ScriptRunner {
         } else {
             StepResult(false, message)
         }
+
+    /** 安全回收无障碍节点，重复回收或已回收时忽略异常。 */
+    @Suppress("DEPRECATION")
+    private fun recycleNode(node: AccessibilityNodeInfo?) {
+        try {
+            node?.recycle()
+        } catch (e: Exception) {
+            // 忽略回收异常
+        }
+    }
 
     /** 坐标拟人化扰动：偏移量在 [-radius, radius] 内随机，偏移后不小于 0。 */
     private fun jitterCoordinate(value: Float, radius: Int): Float {

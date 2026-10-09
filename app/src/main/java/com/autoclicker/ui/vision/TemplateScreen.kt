@@ -467,6 +467,16 @@ private fun FramingOverlay(
     var nameInput by remember { mutableStateOf("模板") }
     var cropToSave by remember { mutableStateOf<Bitmap?>(null) }
 
+    // 该位图由本组件独占。离开组合（取消 / 保存 / 被新截图替换）时回收，避免泄漏；
+    // 放在 onDispose 而非替换处回收，可保证回收发生在停止绘制之后。
+    DisposableEffect(captured) {
+        onDispose {
+            if (!captured.isRecycled) {
+                captured.recycle()
+            }
+        }
+    }
+
     // 选区以位图坐标保存；缩放/平移变化后选区仍对准同一块位图内容。
     val transform = remember(canvasSize, captured, userScale, userOffset) {
         computeViewTransform(canvasSize, captured, userScale, userOffset)
