@@ -37,7 +37,7 @@ class CapturePermissionActivity : ComponentActivity() {
             val data = result.data
             if (result.resultCode == Activity.RESULT_OK && data != null) {
                 ScreenCaptureService.start(this, result.resultCode, data)
-                Toast.makeText(this, "已授权截屏", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "截屏授权成功，正在准备截屏通道…", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "已取消截屏授权", Toast.LENGTH_SHORT).show()
             }

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -78,7 +79,9 @@ import com.autoclicker.core.util.PermissionChecker
 import com.autoclicker.core.vision.CapturePermissionActivity
 import com.autoclicker.core.vision.ColorMatcher
 import com.autoclicker.core.vision.ImageTemplateRepository
+import com.autoclicker.core.vision.RegionPickerBridge
 import com.autoclicker.core.vision.ScreenCaptureService
+import com.autoclicker.core.vision.VisionSettings
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -413,7 +416,12 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
             "主页键" to { Step.Home() },
             "连点" to { Step.Burst(x = centerX, y = centerY) },
             "智能定位点击" to { Step.TapElement(text = "文本") },
-            "识图点击" to { Step.ImageTap(templateId = defaultTemplateId) },
+            "识图点击" to {
+                Step.ImageTap(
+                    templateId = defaultTemplateId,
+                    thresholdPercent = VisionSettings.get(context).defaultThresholdPercent
+                )
+            },
             "识色点击" to { Step.ColorTap(color = -65536) }
         )
         AlertDialog(
@@ -539,6 +547,7 @@ private fun StepEditDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val templateRepo = remember { ImageTemplateRepository.get(context) }
+    val visionSettings = remember { VisionSettings.get(context) }
     var note by remember(step.id) { mutableStateOf(step.note) }
     var delayText by remember(step.id) { mutableStateOf(step.delayBeforeMs.toString()) }
     var xStr by remember(step.id) { mutableStateOf(initialX(step)) }
@@ -588,6 +597,7 @@ private fun StepEditDialog(
     var thresholdStr by remember(step.id) {
         mutableStateOf(((step as? Step.ImageTap)?.thresholdPercent ?: 85).toString())
     }
+    var useGlobalThreshold by remember(step.id) { mutableStateOf(false) }
     var toleranceStr by remember(step.id) {
         mutableStateOf(((step as? Step.ColorTap)?.tolerance ?: 20).toString())
     }
@@ -634,6 +644,20 @@ private fun StepEditDialog(
                 xStr = point.x.toEditable()
                 yStr = point.y.toEditable()
                 PickPointBridge.clear()
+            }
+        }
+    }
+
+    // 悬浮窗框选搜索区域的结果回填：对话框打开期间只消费一次。
+    LaunchedEffect(Unit) {
+        RegionPickerBridge.result.collect { rect ->
+            if (rect != null) {
+                regionLeftStr = rect.left.toString()
+                regionTopStr = rect.top.toString()
+                regionWidthStr = rect.width().toString()
+                regionHeightStr = rect.height().toString()
+                RegionPickerBridge.consume()
+                Toast.makeText(context, "已填入搜索区域", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -976,7 +1000,19 @@ private fun StepEditDialog(
                             label = { Text("阈值%") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
+                            enabled = !useGlobalThreshold,
                             keyboardOptions = NumberKeyboard
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = useGlobalThreshold,
+                                onCheckedChange = { useGlobalThreshold = it }
+                            )
+                            Text("使用全局默认(${visionSettings.defaultThresholdPercent}%)")
+                        }
+                        Text(
+                            "搜索区域（宽或高为 0 表示全屏搜索）",
+                            style = MaterialTheme.typography.bodySmall
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
@@ -1013,6 +1049,37 @@ private fun StepEditDialog(
                                 singleLine = true,
                                 keyboardOptions = NumberKeyboard
                             )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (!ScreenCaptureService.isReady) {
+                                        CapturePermissionActivity.request(context)
+                                        Toast.makeText(
+                                            context,
+                                            "请先授权截屏，再重新框选",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        RegionPickerBridge.request(step.id)
+                                        OverlayService.startRegionPick(context)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("框选搜索区域")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    regionLeftStr = "0"
+                                    regionTopStr = "0"
+                                    regionWidthStr = "0"
+                                    regionHeightStr = "0"
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("重置为全屏")
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedTextField(
@@ -1370,7 +1437,11 @@ private fun StepEditDialog(
                     }
 
                     is Step.ImageTap -> {
-                        val th = thresholdStr.trim().toIntOrNull()
+                        val th = if (useGlobalThreshold) {
+                            visionSettings.defaultThresholdPercent
+                        } else {
+                            thresholdStr.trim().toIntOrNull()
+                        }
                         val rl = regionLeftStr.trim().toIntOrNull()
                         val rt = regionTopStr.trim().toIntOrNull()
                         val rw = regionWidthStr.trim().toIntOrNull()

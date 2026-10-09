@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -23,12 +24,17 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.autoclicker.R
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 识图截屏服务：以前台服务持有 MediaProjection，通过 VirtualDisplay + ImageReader 取帧。
  *
  * 使用流程：先由 CapturePermissionActivity 申请授权，再 start 本服务，随后即可在后台线程
- * 调用 [capture] 抓取屏幕位图。所有异常均被吞掉，不会崩溃。
+ * 调用 [capture] 抓取屏幕位图。失败原因通过 [ready] / [lastError] 两个可观察通道对外暴露，
+ * 不再静默吞异常。
  */
 class ScreenCaptureService : Service() {
 
@@ -41,6 +47,14 @@ class ScreenCaptureService : Service() {
         @Volatile
         var isReady: Boolean = false
             private set
+
+        /** 截屏通道是否就绪（可观察，供 UI/悬浮窗订阅）。 */
+        private val _ready = MutableStateFlow(false)
+        val ready: StateFlow<Boolean> = _ready.asStateFlow()
+
+        /** 最近一次失败原因；成功时置 null。 */
+        private val _lastError = MutableStateFlow<String?>(null)
+        val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
         @Volatile
         private var instance: ScreenCaptureService? = null
@@ -75,6 +89,20 @@ class ScreenCaptureService : Service() {
             val service = instance ?: return null
             return service.captureInternal(maxWidth)
         }
+
+        /**
+         * 挂起等待截屏通道就绪，最多等 timeoutMs。已就绪立即返回 true。
+         * 应在协程中调用。
+         */
+        suspend fun awaitReady(timeoutMs: Long = 4000L): Boolean {
+            if (_ready.value) return true
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                delay(100L)
+                if (_ready.value) return true
+            }
+            return _ready.value
+        }
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -83,10 +111,53 @@ class ScreenCaptureService : Service() {
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
 
+    /** 通道就绪：清空历史错误。 */
+    private fun markReady() {
+        isReady = true
+        _ready.value = true
+        _lastError.value = null
+    }
+
+    /** 启动失败：通道不可用并记录原因。 */
+    private fun markStartFailed(message: String) {
+        isReady = false
+        _ready.value = false
+        _lastError.value = message
+    }
+
+    /** 取帧失败：仅记录原因，不影响通道就绪状态。 */
+    private fun markCaptureFailed(message: String) {
+        _lastError.value = message
+    }
+
+    /** 安全拼接启动失败描述，避免读取 message 时二次异常。 */
+    private fun describeStartFailure(e: Exception): String {
+        val message = try {
+            e.message
+        } catch (t: Throwable) {
+            null
+        }
+        return "启动截屏失败：${e::class.java.simpleName}: $message"
+    }
+
     @Suppress("DEPRECATION")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 必须首行调用，避免前台服务超时崩溃。
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // 必须首行调用，避免前台服务超时崩溃；显式指定前台服务类型（Android 10+）。
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
+        } catch (e: Exception) {
+            markStartFailed(describeStartFailure(e))
+            stopSelf()
+            return Service.START_NOT_STICKY
+        }
 
         try {
             val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -97,6 +168,7 @@ class ScreenCaptureService : Service() {
                 intent?.getParcelableExtra(EXTRA_RESULT_DATA)
             }
             if (data == null) {
+                markStartFailed("启动截屏失败：授权数据为空")
                 stopSelf()
                 return Service.START_NOT_STICKY
             }
@@ -104,6 +176,7 @@ class ScreenCaptureService : Service() {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val projection = manager.getMediaProjection(resultCode, data)
             if (projection == null) {
+                markStartFailed("启动截屏失败：MediaProjection 为空（可能未授权）")
                 stopSelf()
                 return Service.START_NOT_STICKY
             }
@@ -118,6 +191,14 @@ class ScreenCaptureService : Service() {
             handlerThread = thread
             val threadHandler = Handler(thread.looper)
             handler = threadHandler
+
+            // Android 14：投影被系统终止时必须清理并停止服务。
+            projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    markStartFailed("截屏投影已被系统终止")
+                    stopSelf()
+                }
+            }, threadHandler)
 
             val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             imageReader = reader
@@ -134,10 +215,9 @@ class ScreenCaptureService : Service() {
             )
 
             instance = this
-            isReady = true
+            markReady()
         } catch (e: Exception) {
-            isReady = false
-            instance = null
+            markStartFailed(describeStartFailure(e))
             stopSelf()
         }
 
@@ -148,6 +228,7 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         isReady = false
+        _ready.value = false
         instance = null
         try {
             virtualDisplay?.release()
@@ -178,41 +259,88 @@ class ScreenCaptureService : Service() {
     }
 
     private fun captureInternal(maxWidth: Int): Bitmap? {
-        val reader = imageReader ?: return null
-        var image: Image? = null
-        try {
-            image = reader.acquireLatestImage() ?: return null
-            val plane = image.planes[0]
-            val buffer = plane.buffer
-            val pixelStride = plane.pixelStride
-            val rowStride = plane.rowStride
-            if (pixelStride <= 0 || rowStride <= 0) return null
-
-            // rowStride 可能大于 width * pixelStride，按行跨距计算实际位图宽度。
-            val bitmapWidth = rowStride / pixelStride
-            val bitmap = Bitmap.createBitmap(bitmapWidth, image.height, Bitmap.Config.ARGB_8888)
-            bitmap.copyPixelsFromBuffer(buffer)
-
-            if (maxWidth > 0 && bitmap.width > maxWidth) {
-                val targetHeight = (bitmap.height.toLong() * maxWidth / bitmap.width)
-                    .toInt()
-                    .coerceAtLeast(1)
-                val scaled = Bitmap.createScaledBitmap(bitmap, maxWidth, targetHeight, true)
-                if (scaled !== bitmap) {
-                    bitmap.recycle()
-                }
-                return scaled
-            }
-            return bitmap
-        } catch (e: Exception) {
+        val reader = imageReader
+        if (reader == null) {
+            markCaptureFailed("取帧失败：截屏通道未就绪")
             return null
-        } finally {
+        }
+        val maxAttempts = 8
+        val retryIntervalMs = 120L
+        var lastException: Exception? = null
+
+        for (attempt in 1..maxAttempts) {
+            var image: Image? = null
             try {
-                image?.close()
+                image = reader.acquireLatestImage()
+                if (image == null) {
+                    // VirtualDisplay 刚建好可能还没有新帧，等待后重试。
+                    if (attempt < maxAttempts) {
+                        try {
+                            Thread.sleep(retryIntervalMs)
+                        } catch (ie: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            break
+                        }
+                    }
+                    continue
+                }
+
+                val plane = image.planes[0]
+                val buffer = plane.buffer
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
+                if (pixelStride <= 0 || rowStride <= 0) {
+                    markCaptureFailed("取帧异常：像素跨距非法")
+                    return null
+                }
+
+                // rowStride 可能大于 width * pixelStride，按行跨距计算实际位图宽度。
+                val bitmapWidth = rowStride / pixelStride
+                val bitmap = Bitmap.createBitmap(bitmapWidth, image.height, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(buffer)
+
+                _lastError.value = null
+                if (maxWidth > 0 && bitmap.width > maxWidth) {
+                    val targetHeight = (bitmap.height.toLong() * maxWidth / bitmap.width)
+                        .toInt()
+                        .coerceAtLeast(1)
+                    val scaled = Bitmap.createScaledBitmap(bitmap, maxWidth, targetHeight, true)
+                    if (scaled !== bitmap) {
+                        bitmap.recycle()
+                    }
+                    return scaled
+                }
+                return bitmap
             } catch (e: Exception) {
-                // 忽略
+                lastException = e
+                if (attempt < maxAttempts) {
+                    try {
+                        Thread.sleep(retryIntervalMs)
+                    } catch (ie: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            } finally {
+                try {
+                    image?.close()
+                } catch (e: Exception) {
+                    // 忽略
+                }
             }
         }
+
+        if (lastException != null) {
+            val message = try {
+                lastException.message
+            } catch (t: Throwable) {
+                null
+            }
+            markCaptureFailed("取帧异常: ${lastException::class.java.simpleName}: $message")
+        } else {
+            markCaptureFailed("取帧超时（可能未授权或屏幕无变化）")
+        }
+        return null
     }
 
     /** 屏幕尺寸：API 30+ 用 currentWindowMetrics，低于 30 用 displayMetrics。 */

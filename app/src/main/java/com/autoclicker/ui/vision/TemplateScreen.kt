@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,6 +47,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -60,12 +62,14 @@ import com.autoclicker.core.vision.ImageTemplate
 import com.autoclicker.core.vision.ImageTemplateRepository
 import com.autoclicker.core.vision.ScreenCaptureService
 import com.autoclicker.core.vision.VisionBridge
+import com.autoclicker.core.vision.VisionSettings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,69 +79,102 @@ private val templateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.get
 private fun formatTemplateTime(timestamp: Long): String =
     templateTimeFormat.format(Date(timestamp))
 
+/** 用户缩放上限（1x 表示适配屏幕）。 */
+private const val MAX_USER_SCALE = 4f
+
 /**
- * ContentScale.Fit 在画布中实际绘制区域的几何信息。
+ * 画布视图变换：ContentScale.Fit 基准缩放 + 用户缩放/平移。
  *
- * scale：位图到画布的缩放比；offsetX/offsetY：留白偏移（像素）；
- * imgLeft/imgTop/imgRight/imgBottom：图片实际绘制矩形（画布像素坐标）。
+ * 设 fitScale = min(canvasW / bmpW, canvasH / bmpH)，图片以画布中心为锚点、
+ * 按 userScale 放大后再平移 userOffset，则图片在画布上的实际显示区域为：
+ *   dispW = bmpW * fitScale * userScale
+ *   dispH = bmpH * fitScale * userScale
+ *   dispLeft = (canvasW - dispW) / 2 + userOffset.x
+ *   dispTop  = (canvasH - dispH) / 2 + userOffset.y
+ *
+ * [Image] 用 graphicsLayer(scaleX/scaleY = userScale, translationX/Y = userOffset) 实现同一变换，
+ * 因此这里换算出的显示区域与 Image 实际绘制区域一致：绘制高亮框与裁剪共用同一套坐标换算。
  */
-private data class FitGeometry(
-    val scale: Float,
-    val offsetX: Float,
-    val offsetY: Float,
-    val imgLeft: Float,
-    val imgTop: Float,
-    val imgRight: Float,
-    val imgBottom: Float,
+private data class ViewTransform(
+    val canvas: IntSize,
+    val bmpW: Float,
+    val bmpH: Float,
+    val fitScale: Float,
+    val userScale: Float,
+    val offset: Offset,
     val valid: Boolean
 )
 
-/**
- * 计算 ContentScale.Fit 下图片的真实绘制区域。
- *
- * scale = min(canvasW / bmpW, canvasH / bmpH)
- * offsetX = (canvasW - bmpW * scale) / 2，offsetY 同理，即上下/左右留白。
- */
-private fun computeFitGeometry(canvas: IntSize, bitmap: Bitmap?): FitGeometry {
+private fun computeViewTransform(
+    canvas: IntSize,
+    bitmap: Bitmap?,
+    userScale: Float,
+    userOffset: Offset
+): ViewTransform {
     if (bitmap == null || canvas.width <= 0 || canvas.height <= 0) {
-        return FitGeometry(1f, 0f, 0f, 0f, 0f, 0f, 0f, false)
+        return ViewTransform(canvas, 0f, 0f, 1f, 1f, Offset.Zero, false)
     }
     val bmpW = bitmap.width.toFloat()
     val bmpH = bitmap.height.toFloat()
-    val scale = min(canvas.width / bmpW, canvas.height / bmpH)
-    val drawW = bmpW * scale
-    val drawH = bmpH * scale
-    val offsetX = (canvas.width - drawW) / 2f
-    val offsetY = (canvas.height - drawH) / 2f
-    return FitGeometry(
-        scale = scale,
-        offsetX = offsetX,
-        offsetY = offsetY,
-        imgLeft = offsetX,
-        imgTop = offsetY,
-        imgRight = offsetX + drawW,
-        imgBottom = offsetY + drawH,
+    val fitScale = min(canvas.width / bmpW, canvas.height / bmpH)
+    return ViewTransform(
+        canvas = canvas,
+        bmpW = bmpW,
+        bmpH = bmpH,
+        fitScale = fitScale,
+        userScale = userScale.coerceIn(1f, MAX_USER_SCALE),
+        offset = userOffset,
         valid = true
     )
 }
 
-/** 把画布坐标限制到图片实际绘制区域内，避免拖拽到留白区。 */
-private fun clampToImage(point: Offset, geometry: FitGeometry): Offset {
-    if (!geometry.valid) return point
+/** 位图坐标 → 画布坐标的当前总缩放比。 */
+private fun ViewTransform.totalScale(): Float = fitScale * userScale
+
+/** 图片在画布上的显示宽度（像素）。 */
+private fun ViewTransform.displayWidth(): Float = bmpW * totalScale()
+
+/** 图片在画布上的显示高度（像素）。 */
+private fun ViewTransform.displayHeight(): Float = bmpH * totalScale()
+
+/** 图片显示区域左边界（画布坐标）。 */
+private fun ViewTransform.displayLeft(): Float =
+    (canvas.width - displayWidth()) / 2f + offset.x
+
+/** 图片显示区域上边界（画布坐标）。 */
+private fun ViewTransform.displayTop(): Float =
+    (canvas.height - displayHeight()) / 2f + offset.y
+
+/** 把画布坐标夹取到图片显示区域内，避免拖拽到留白区。 */
+private fun clampCanvasToImage(point: Offset, t: ViewTransform): Offset {
+    if (!t.valid) return point
+    val left = t.displayLeft()
+    val top = t.displayTop()
     return Offset(
-        x = point.x.coerceIn(geometry.imgLeft, geometry.imgRight),
-        y = point.y.coerceIn(geometry.imgTop, geometry.imgBottom)
+        x = point.x.coerceIn(left, left + t.displayWidth()),
+        y = point.y.coerceIn(top, top + t.displayHeight())
     )
 }
 
-/** 画布像素坐标 → 位图像素坐标：(p - offset) / scale，并限制在位图范围内。 */
-private fun canvasToBitmap(point: Offset, geometry: FitGeometry, bitmap: Bitmap): Offset {
-    if (!geometry.valid || geometry.scale <= 0f) return Offset.Zero
-    val bx = ((point.x - geometry.offsetX) / geometry.scale)
-        .coerceIn(0f, bitmap.width.toFloat())
-    val by = ((point.y - geometry.offsetY) / geometry.scale)
-        .coerceIn(0f, bitmap.height.toFloat())
+/**
+ * 画布像素坐标 → 位图像素坐标：
+ *   bx = (px - dispLeft) / (fitScale * userScale)
+ *   by = (py - dispTop) / (fitScale * userScale)
+ * 并把结果夹取到 [0, bmpW] / [0, bmpH]。
+ */
+private fun canvasToBitmap(point: Offset, t: ViewTransform, bitmap: Bitmap): Offset {
+    if (!t.valid || t.totalScale() <= 0f) return Offset.Zero
+    val s = t.totalScale()
+    val bx = ((point.x - t.displayLeft()) / s).coerceIn(0f, bitmap.width.toFloat())
+    val by = ((point.y - t.displayTop()) / s).coerceIn(0f, bitmap.height.toFloat())
     return Offset(bx, by)
+}
+
+/** 位图像素坐标 → 画布像素坐标（绘制高亮框用，与裁剪共用同一变换）。 */
+private fun bitmapToCanvas(x: Float, y: Float, t: ViewTransform): Offset {
+    if (!t.valid || t.totalScale() <= 0f) return Offset.Zero
+    val s = t.totalScale()
+    return Offset(t.displayLeft() + x * s, t.displayTop() + y * s)
 }
 
 /**
@@ -260,6 +297,39 @@ fun TemplateScreen(onBack: () -> Unit) {
                                 Text("截取当前屏幕")
                             }
                         }
+                    }
+                }
+
+                // 识图默认阈值设置
+                var defaultThreshold by remember {
+                    mutableStateOf(VisionSettings.get(context).defaultThresholdPercent)
+                }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("识图默认阈值", style = MaterialTheme.typography.titleMedium)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Slider(
+                                value = defaultThreshold.toFloat(),
+                                onValueChange = {
+                                    val v = it.roundToInt().coerceIn(0, 100)
+                                    defaultThreshold = v
+                                    VisionSettings.get(context).defaultThresholdPercent = v
+                                },
+                                valueRange = 0f..100f,
+                                steps = 19,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text("${defaultThreshold}%")
+                        }
+                        Text(
+                            "新建识图步骤时的默认相似度，越高越严格",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
 
@@ -389,13 +459,18 @@ private fun FramingOverlay(
     onSaved: () -> Unit
 ) {
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    var startOffset by remember { mutableStateOf<Offset?>(null) }
-    var currentOffset by remember { mutableStateOf<Offset?>(null) }
+    var startBitmap by remember { mutableStateOf<Offset?>(null) }
+    var currentBitmap by remember { mutableStateOf<Offset?>(null) }
+    var userScale by remember { mutableStateOf(1f) }
+    var userOffset by remember { mutableStateOf(Offset.Zero) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf("模板") }
     var cropToSave by remember { mutableStateOf<Bitmap?>(null) }
 
-    val geometry = remember(canvasSize, captured) { computeFitGeometry(canvasSize, captured) }
+    // 选区以位图坐标保存；缩放/平移变化后选区仍对准同一块位图内容。
+    val transform = remember(canvasSize, captured, userScale, userOffset) {
+        computeViewTransform(canvasSize, captured, userScale, userOffset)
+    }
 
     Box(
         modifier = Modifier
@@ -406,36 +481,53 @@ private fun FramingOverlay(
             bitmap = captured.asImageBitmap(),
             contentDescription = "待框选截图",
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = userScale,
+                    scaleY = userScale,
+                    translationX = userOffset.x,
+                    translationY = userOffset.y
+                )
         )
 
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                .pointerInput(captured, geometry) {
-                    if (!geometry.valid) return@pointerInput
+                .pointerInput(captured, transform) {
+                    if (!transform.valid) return@pointerInput
                     detectDragGestures(
                         onDragStart = { offset ->
-                            val point = clampToImage(offset, geometry)
-                            startOffset = point
-                            currentOffset = point
+                            val b = canvasToBitmap(
+                                clampCanvasToImage(offset, transform),
+                                transform,
+                                captured
+                            )
+                            startBitmap = b
+                            currentBitmap = b
                         },
-                        onDrag = { change, dragAmount ->
+                        onDrag = { change, _ ->
                             change.consume()
-                            val base = currentOffset ?: startOffset ?: Offset.Zero
-                            currentOffset = clampToImage(base + dragAmount, geometry)
+                            currentBitmap = canvasToBitmap(
+                                clampCanvasToImage(change.position, transform),
+                                transform,
+                                captured
+                            )
                         },
                         onDragEnd = { },
                         onDragCancel = { }
                     )
                 }
         ) {
-            val start = startOffset
-            val end = currentOffset
+            // 选区存的是位图坐标，绘制时用同一变换反算回画布坐标。
+            val start = startBitmap
+            val end = currentBitmap
             if (start != null && end != null) {
-                val topLeft = Offset(min(start.x, end.x), min(start.y, end.y))
-                val rectSize = Size(abs(end.x - start.x), abs(end.y - start.y))
+                val p1 = bitmapToCanvas(start.x, start.y, transform)
+                val p2 = bitmapToCanvas(end.x, end.y, transform)
+                val topLeft = Offset(min(p1.x, p2.x), min(p1.y, p2.y))
+                val rectSize = Size(abs(p2.x - p1.x), abs(p2.y - p1.y))
                 drawRect(color = Color(0x3300BCD4), topLeft = topLeft, size = rectSize)
                 drawRect(
                     color = Color(0xFF00BCD4),
@@ -446,10 +538,39 @@ private fun FramingOverlay(
             }
         }
 
+        // 缩放控制按钮（不与单指框选冲突）；缩放锚点为画面中心。
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = { userScale = (userScale + 0.5f).coerceIn(1f, MAX_USER_SCALE) }
+            ) {
+                Text("＋")
+            }
+            OutlinedButton(
+                onClick = { userScale = (userScale - 0.5f).coerceIn(1f, MAX_USER_SCALE) }
+            ) {
+                Text("－")
+            }
+            OutlinedButton(
+                onClick = {
+                    userScale = 1f
+                    userOffset = Offset.Zero
+                }
+            ) {
+                Text("重置")
+            }
+            Text("${(userScale * 100).roundToInt()}%", color = Color.White)
+        }
+
         TextButton(
             onClick = {
-                startOffset = null
-                currentOffset = null
+                startBitmap = null
+                currentBitmap = null
             },
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -470,8 +591,10 @@ private fun FramingOverlay(
                 onClick = {
                     cropToSave?.recycle()
                     cropToSave = null
-                    startOffset = null
-                    currentOffset = null
+                    startBitmap = null
+                    currentBitmap = null
+                    userScale = 1f
+                    userOffset = Offset.Zero
                     onCancel()
                 },
                 modifier = Modifier.weight(1f)
@@ -480,17 +603,16 @@ private fun FramingOverlay(
             }
             Button(
                 onClick = {
-                    val start = startOffset
-                    val end = currentOffset
+                    val start = startBitmap
+                    val end = currentBitmap
                     if (start == null || end == null) {
                         onToast("请拖拽选择一个区域")
                     } else {
-                        val b1 = canvasToBitmap(start, geometry, captured)
-                        val b2 = canvasToBitmap(end, geometry, captured)
-                        val left = min(b1.x, b2.x).toInt()
-                        val top = min(b1.y, b2.y).toInt()
-                        val right = max(b1.x, b2.x).toInt()
-                        val bottom = max(b1.y, b2.y).toInt()
+                        // 选区已是位图坐标，直接换算裁剪矩形。
+                        val left = min(start.x, end.x).toInt()
+                        val top = min(start.y, end.y).toInt()
+                        val right = max(start.x, end.x).toInt()
+                        val bottom = max(start.y, end.y).toInt()
                         val width = right - left
                         val height = bottom - top
                         if (width < 8 || height < 8) {

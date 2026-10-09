@@ -7,13 +7,17 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.os.IBinder
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -24,6 +28,7 @@ import com.autoclicker.core.clicker.ClickerConfig
 import com.autoclicker.core.clicker.ClickerEngine
 import com.autoclicker.core.clicker.ClickerExporter
 import com.autoclicker.core.clicker.ClickerPoint
+import com.autoclicker.core.clicker.ClickerState
 import com.autoclicker.core.recorder.ScriptRecorder
 import com.autoclicker.core.runner.RunnerState
 import com.autoclicker.core.runner.ScriptRunner
@@ -33,6 +38,7 @@ import com.autoclicker.core.script.Step
 import com.autoclicker.core.script.withNewId
 import com.autoclicker.core.util.PermissionChecker
 import com.autoclicker.core.vision.CapturePermissionActivity
+import com.autoclicker.core.vision.RegionPickerBridge
 import com.autoclicker.core.vision.ScreenCaptureService
 import com.autoclicker.core.vision.VisionBridge
 import java.text.SimpleDateFormat
@@ -56,6 +62,7 @@ class OverlayService : Service() {
         const val ACTION_START = "com.autoclicker.action.OVERLAY_START"
         const val ACTION_STOP = "com.autoclicker.action.OVERLAY_STOP"
         const val ACTION_START_PICK = "com.autoclicker.action.OVERLAY_START_PICK"
+        const val ACTION_START_REGION_PICK = "com.autoclicker.action.REGION_PICK"
         const val CHANNEL_ID = "overlay_channel"
         const val NOTIFICATION_ID = 1002
 
@@ -94,18 +101,33 @@ class OverlayService : Service() {
                 Intent(context, OverlayService::class.java).setAction(ACTION_START_PICK)
             )
         }
+
+        /** 在目标 App 上方全屏框选一个矩形，结果通过 RegionPickerBridge 交回编辑器。 */
+        fun startRegionPick(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, OverlayService::class.java).setAction(ACTION_START_REGION_PICK)
+            )
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /** 悬浮窗三态：小球 / 迷你条 / 面板。 */
+    private enum class OverlayMode { BALL, MINI_BAR, PANEL }
+
     private val windowManager: WindowManager
         get() = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
+    private var mode = OverlayMode.BALL
     private var ballView: View? = null
     private var ballParams: WindowManager.LayoutParams? = null
     private var panelView: View? = null
     private var panelParams: WindowManager.LayoutParams? = null
+    private var miniBarView: View? = null
+    private var miniBarParams: WindowManager.LayoutParams? = null
     private var pickView: View? = null
+    private var regionPickView: View? = null
     private var subscribed = false
     private var editorShowing = false
 
@@ -121,6 +143,7 @@ class OverlayService : Service() {
         override fun onResumeClick() = ScriptRunner.resume()
         override fun onStopClick() = ScriptRunner.stop()
         override fun onStartRecord() {
+            collapseForAutomation()
             if (!AutoAccessService.isConnected) {
                 toast("请先在无障碍设置中开启服务，再开始录制")
                 PermissionChecker.openAccessibilitySettings(this@OverlayService)
@@ -141,6 +164,9 @@ class OverlayService : Service() {
         override fun onDuplicateStep(script: Script?, index: Int) = duplicateStep(script, index)
         override fun onCaptureTemplate() = captureTemplate()
         override fun onOpenClicker() = showClicker()
+        override fun onCollapseMiniBar() = setMode(OverlayMode.MINI_BAR)
+        override fun onExpandPanel() = setMode(OverlayMode.PANEL)
+        override fun onHideToBall() = setMode(OverlayMode.BALL)
     }
 
     private val clickerCallbacks = object : ClickerOverlay.Callbacks {
@@ -171,6 +197,7 @@ class OverlayService : Service() {
                 PermissionChecker.openAccessibilitySettings(this@OverlayService)
                 return
             }
+            collapseForAutomation()
             if (!ClickerEngine.start()) {
                 toast("启动失败：请先添加点击点")
             }
@@ -232,6 +259,11 @@ class OverlayService : Service() {
 
             ACTION_START_PICK -> showPickOverlay()
 
+            ACTION_START_REGION_PICK -> {
+                collapseForAutomation()
+                showRegionPickOverlay()
+            }
+
             else -> {
                 isRunning = true
                 showBall()
@@ -262,22 +294,42 @@ class OverlayService : Service() {
     }
 
     private fun updateStatus() {
-        val panel = panelView ?: return
         val state = ScriptRunner.state.value
-        OverlayUi.setStatus(
-            panel,
-            OverlayUi.formatStatus(
-                state,
-                ScriptRecorder.isRecording.value,
-                ScriptRecorder.stepCount.value
-            )
-        )
-        val stepIndex = when (state) {
-            is RunnerState.Running -> state.stepIndex
-            is RunnerState.Paused -> state.stepIndex
-            else -> -1
+        val recording = ScriptRecorder.isRecording.value
+        val stepCount = ScriptRecorder.stepCount.value
+        val clickerState = ClickerEngine.state.value
+        val clickerRunning = ClickerEngine.isRunning
+        val active = state.isActive || recording || clickerRunning
+        val statusText = OverlayUi.formatStatus(state, recording, stepCount)
+
+        val panel = panelView
+        if (panel != null) {
+            OverlayUi.setStatus(panel, statusText)
+            OverlayUi.setPanelControls(panel, state, recording, clickerRunning)
+            val stepIndex = when (state) {
+                is RunnerState.Running -> state.stepIndex
+                is RunnerState.Paused -> state.stepIndex
+                else -> -1
+            }
+            OverlayUi.highlightStep(panel, stepIndex)
         }
-        OverlayUi.highlightStep(panel, stepIndex)
+
+        val miniBar = miniBarView
+        if (miniBar != null) {
+            OverlayUi.setMiniBarStatus(miniBar, statusText, active)
+        }
+
+        val ball = ballView
+        if (ball != null) {
+            val ballRunning = state.isActive || clickerRunning
+            val ballText = when {
+                state is RunnerState.Running -> (state.stepIndex + 1).toString()
+                state is RunnerState.Paused -> (state.stepIndex + 1).toString()
+                clickerState is ClickerState.Running -> (clickerState.pointIndex + 1).toString()
+                else -> ""
+            }
+            OverlayUi.setBallStatus(ball, ballText, ballRunning)
+        }
     }
 
     // ---- 悬浮球 / 面板 ----
@@ -351,14 +403,50 @@ class OverlayService : Service() {
     }
 
     private fun togglePanel() {
-        if (panelView != null) {
-            removeView(panelView)
-            panelView = null
-            panelParams = null
-            updateRecorderIgnoredRegion()
-        } else {
-            showPanel()
+        when (mode) {
+            OverlayMode.BALL -> setMode(OverlayMode.PANEL)
+            else -> setMode(OverlayMode.BALL)
         }
+    }
+
+    /** 切换三态：始终保留悬浮球，按目标态增删面板 / 迷你条。 */
+    private fun setMode(newMode: OverlayMode) {
+        showBall()
+        when (newMode) {
+            OverlayMode.BALL -> {
+                removePanel()
+                removeMiniBar()
+            }
+
+            OverlayMode.MINI_BAR -> {
+                removePanel()
+                showMiniBar()
+            }
+
+            OverlayMode.PANEL -> {
+                removeMiniBar()
+                showPanel()
+            }
+        }
+        mode = newMode
+        updateRecorderIgnoredRegion()
+    }
+
+    /** 进入自动化类操作前自动收起面板，避免遮挡目标 App。 */
+    private fun collapseForAutomation() {
+        if (mode == OverlayMode.PANEL) setMode(OverlayMode.MINI_BAR)
+    }
+
+    private fun removePanel() {
+        removeView(panelView)
+        panelView = null
+        panelParams = null
+    }
+
+    private fun removeMiniBar() {
+        removeView(miniBarView)
+        miniBarView = null
+        miniBarParams = null
     }
 
     private fun showPanel() {
@@ -385,9 +473,30 @@ class OverlayService : Service() {
         updateRecorderIgnoredRegion()
     }
 
+    /** 迷你条：收起面板后的快捷条，保留一键启停与展开入口。 */
+    private fun showMiniBar() {
+        if (miniBarView != null) return
+        val view = OverlayUi.createMiniBar(this, panelCallbacks)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.TOP or Gravity.START
+        if (!addView(view, params)) return
+        miniBarView = view
+        miniBarParams = params
+        refreshScripts()
+        updateStatus()
+        updateRecorderIgnoredRegion()
+    }
+
     // ---- 坐标拾取 ----
 
     private fun showPickOverlay() {
+        collapseForAutomation()
         if (pickView != null) return
         val view = OverlayUi.createPickLayer(this)
         val params = WindowManager.LayoutParams(
@@ -411,6 +520,107 @@ class OverlayService : Service() {
         }
     }
 
+    /** 全屏区域框选：拖拽一个矩形，结果通过 [RegionPickerBridge] 交回编辑器。 */
+    private fun showRegionPickOverlay() {
+        collapseForAutomation()
+        if (regionPickView != null) return
+        try {
+            val root = FrameLayout(this)
+            root.setBackgroundColor(0x99000000.toInt())
+
+            val hint = TextView(this).apply {
+                text = "拖拽框选识图搜索区域"
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                gravity = Gravity.CENTER
+            }
+            root.addView(
+                hint,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                ).apply { topMargin = OverlayUi.dp(this@OverlayService, 48f) }
+            )
+
+            val box = View(this)
+            box.background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(0x3334B0FF.toInt())
+                setStroke(OverlayUi.dp(this@OverlayService, 1f), 0xFF34B0FF.toInt())
+            }
+            box.visibility = View.INVISIBLE
+            val boxLp = FrameLayout.LayoutParams(0, 0, Gravity.TOP or Gravity.START)
+            root.addView(box, boxLp)
+
+            val minSize = OverlayUi.dp(this, 8f)
+            var startX = 0f
+            var startY = 0f
+            root.setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.rawX
+                        startY = event.rawY
+                        box.visibility = View.INVISIBLE
+                        true
+                    }
+
+                    MotionEvent.ACTION_MOVE -> {
+                        val left = minOf(startX, event.rawX)
+                        val top = minOf(startY, event.rawY)
+                        val right = maxOf(startX, event.rawX)
+                        val bottom = maxOf(startY, event.rawY)
+                        boxLp.leftMargin = left.toInt()
+                        boxLp.topMargin = top.toInt()
+                        boxLp.width = (right - left).toInt()
+                        boxLp.height = (bottom - top).toInt()
+                        box.layoutParams = boxLp
+                        box.visibility = View.VISIBLE
+                        true
+                    }
+
+                    MotionEvent.ACTION_UP -> {
+                        val left = minOf(startX, event.rawX)
+                        val top = minOf(startY, event.rawY)
+                        val right = maxOf(startX, event.rawX)
+                        val bottom = maxOf(startY, event.rawY)
+                        if ((right - left) < minSize || (bottom - top) < minSize) {
+                            toast("框选区域太小，请重新拖拽")
+                        } else {
+                            RegionPickerBridge.publish(
+                                Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
+                            )
+                            removeRegionPickOverlay()
+                            openApp()
+                        }
+                        true
+                    }
+
+                    else -> false
+                }
+            }
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.TOP or Gravity.START
+            if (addView(root, params)) {
+                regionPickView = root
+            }
+        } catch (e: Exception) {
+            // 忽略
+        }
+    }
+
+    private fun removeRegionPickOverlay() {
+        removeView(regionPickView)
+        regionPickView = null
+    }
+
     // ---- 点击器模式 ----
 
     /** 打开点击器模式：显示全屏标记层与底部控制条。 */
@@ -421,12 +631,8 @@ class OverlayService : Service() {
         }
         ClickerEngine.attach(this)
 
-        // 面板若开着先关掉，避免遮挡标记层。
-        if (panelView != null) {
-            removeView(panelView)
-            panelView = null
-            panelParams = null
-        }
+        // 面板 / 迷你条若开着先收起到小球，避免遮挡标记层。
+        setMode(OverlayMode.BALL)
 
         if (markerView == null) {
             val view = ClickerOverlay.createMarkerLayer(this, clickerCallbacks)
@@ -484,6 +690,7 @@ class OverlayService : Service() {
                 refreshClickerStatus()
                 controlBarView?.let { ClickerOverlay.setRunning(it, st.isRunning) }
                 setMarkerTouchable(!st.isRunning)
+                updateStatus()
             }
         }
     }
@@ -541,6 +748,7 @@ class OverlayService : Service() {
             PermissionChecker.openAccessibilitySettings(this)
             return
         }
+        collapseForAutomation()
         if (!ScriptRunner.start(this, script)) {
             toast("启动失败：已有脚本在运行")
         }
@@ -590,9 +798,16 @@ class OverlayService : Service() {
     }
 
     private fun refreshScripts() {
-        val panel = panelView ?: return
-        OverlayUi.setScripts(panel, repositoryScripts())
-        refreshSteps(OverlayUi.currentScript(panel))
+        val scripts = repositoryScripts()
+        val panel = panelView
+        if (panel != null) {
+            OverlayUi.setScripts(panel, scripts)
+            refreshSteps(OverlayUi.currentScript(panel))
+        }
+        val miniBar = miniBarView
+        if (miniBar != null) {
+            OverlayUi.setScripts(miniBar, scripts)
+        }
     }
 
     /** 重建步骤列表行，并刷新循环 / 拟人化信息行。 */
@@ -672,32 +887,40 @@ class OverlayService : Service() {
 
     /** 截屏并把位图交给识图页框选模板。 */
     private fun captureTemplate() {
-        if (!ScreenCaptureService.isReady) {
-            toast("尚未授权截屏，正在打开授权页")
-            CapturePermissionActivity.request(this)
-            return
-        }
+        collapseForAutomation()
         scope.launch {
-            val bitmap: Bitmap? = withContext(Dispatchers.IO) {
+            if (!ScreenCaptureService.awaitReady(4000L)) {
+                toast("尚未授权截屏，正在打开授权页…")
+                CapturePermissionActivity.request(this@OverlayService)
+                // 授权后用户回到目标 App，再挂起等待一次，就绪就自动继续。
+                if (!ScreenCaptureService.awaitReady(8000L)) {
+                    toast("截屏通道未就绪：${ScreenCaptureService.lastError.value ?: "未知原因"}")
+                    return@launch
+                }
+            }
+            val bmp: Bitmap? = withContext(Dispatchers.IO) {
                 ScreenCaptureService.capture(0)
             }
-            if (bitmap == null) {
-                toast("截屏失败")
+            if (bmp == null) {
+                toast("截屏失败：${ScreenCaptureService.lastError.value ?: "未知原因"}")
                 return@launch
             }
-            VisionBridge.publishCapture(bitmap)
+            VisionBridge.publishCapture(bmp)
             toast("已截屏，请在识图页框选区域")
-            try {
-                startActivity(
-                    Intent(this@OverlayService, MainActivity::class.java)
-                        .addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        )
-                        .putExtra("open_route", "vision")
-                )
-            } catch (e: Exception) {
-                // 忽略
-            }
+            openAppWithRoute("vision")
+        }
+    }
+
+    /** 打开应用并携带路由参数（供识图页等直接进入指定子页）。 */
+    private fun openAppWithRoute(route: String) {
+        try {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    .putExtra("open_route", route)
+            )
+        } catch (e: Exception) {
+            // 忽略
         }
     }
 
@@ -730,8 +953,13 @@ class OverlayService : Service() {
         removeView(panelView)
         panelView = null
         panelParams = null
+        removeView(miniBarView)
+        miniBarView = null
+        miniBarParams = null
         removeView(pickView)
         pickView = null
+        removeView(regionPickView)
+        regionPickView = null
         removeView(markerView)
         markerView = null
         markerParams = null
@@ -739,6 +967,7 @@ class OverlayService : Service() {
         controlBarView = null
         controlBarParams = null
         ClickerOverlay.hideEditors(windowManager)
+        mode = OverlayMode.BALL
     }
 
     private fun buildNotification(): Notification {

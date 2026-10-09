@@ -35,6 +35,19 @@ internal object OverlayUi {
     /** 步骤行高亮（当前执行）背景色。 */
     private const val COLOR_ROW_HIGHLIGHT = 0x5534B0FF
 
+    // 面板按钮在 PanelHolder.buttons 中的 key，setPanelControls 复用同一套 key。
+    private const val KEY_START = "start"
+    private const val KEY_PAUSE = "pause"
+    private const val KEY_RESUME = "resume"
+    private const val KEY_STOP = "stop"
+    private const val KEY_START_RECORD = "startRecord"
+    private const val KEY_STOP_RECORD = "stopRecord"
+    private const val KEY_REFRESH = "refresh"
+    private const val KEY_CAPTURE_TEMPLATE = "captureTemplate"
+    private const val KEY_OPEN_APP = "openApp"
+    private const val KEY_CLOSE = "close"
+    private const val KEY_CLICKER_MODE = "clickerMode"
+
     /** 面板按钮与步骤行回调。 */
     interface PanelCallbacks {
         fun onStartClick(script: Script?)
@@ -53,6 +66,9 @@ internal object OverlayUi {
         fun onDuplicateStep(script: Script?, index: Int)
         fun onCaptureTemplate()
         fun onOpenClicker()
+        fun onCollapseMiniBar()
+        fun onExpandPanel()
+        fun onHideToBall()
     }
 
     /** 直径 48dp 的圆形悬浮球。 */
@@ -63,11 +79,7 @@ internal object OverlayUi {
         ball.setTextColor(Color.WHITE)
         ball.textSize = 16f
         ball.gravity = Gravity.CENTER
-        ball.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(0xCC1E88E5.toInt())
-            setStroke(dp(context, 1f), 0x8834B0FF.toInt())
-        }
+        ball.background = circleBackground(context, 0xCC1E88E5.toInt(), 0x8834B0FF.toInt())
         ball.layoutParams = ViewGroup.LayoutParams(size, size)
         return ball
     }
@@ -145,34 +157,43 @@ internal object OverlayUi {
 
         val row1 = row(
             context,
-            button(context, "开始") { callbacks.onStartClick(holder.selectedScript) },
-            button(context, "暂停") { callbacks.onPauseClick() },
-            button(context, "继续") { callbacks.onResumeClick() },
-            button(context, "停止") { callbacks.onStopClick() }
+            registerButton(
+                holder, KEY_START,
+                button(context, "开始") { callbacks.onStartClick(holder.selectedScript) }
+            ),
+            registerButton(holder, KEY_PAUSE, button(context, "暂停") { callbacks.onPauseClick() }),
+            registerButton(holder, KEY_RESUME, button(context, "继续") { callbacks.onResumeClick() }),
+            registerButton(holder, KEY_STOP, button(context, "停止") { callbacks.onStopClick() })
         )
         addRow(context, root, row1)
 
         val row2 = row(
             context,
-            button(context, "开始录制") { callbacks.onStartRecord() },
-            button(context, "结束录制") { callbacks.onStopRecord() }
+            registerButton(holder, KEY_START_RECORD, button(context, "开始录制") { callbacks.onStartRecord() }),
+            registerButton(holder, KEY_STOP_RECORD, button(context, "结束录制") { callbacks.onStopRecord() })
         )
         addRow(context, root, row2)
 
         val row3 = row(
             context,
-            button(context, "刷新") { callbacks.onRefreshScripts() },
-            button(context, "截屏取模板") { callbacks.onCaptureTemplate() },
-            button(context, "打开应用") { callbacks.onOpenApp() },
-            button(context, "关闭") { callbacks.onCloseOverlay() }
+            registerButton(holder, KEY_REFRESH, button(context, "刷新") { callbacks.onRefreshScripts() }),
+            registerButton(holder, KEY_CAPTURE_TEMPLATE, button(context, "截屏取模板") { callbacks.onCaptureTemplate() }),
+            registerButton(holder, KEY_OPEN_APP, button(context, "打开应用") { callbacks.onOpenApp() }),
+            registerButton(holder, KEY_CLOSE, button(context, "关闭") { callbacks.onCloseOverlay() })
         )
         addRow(context, root, row3)
 
         val row4 = row(
             context,
-            button(context, "点击器模式") { callbacks.onOpenClicker() }
+            registerButton(holder, KEY_CLICKER_MODE, button(context, "点击器模式") { callbacks.onOpenClicker() })
         )
         addRow(context, root, row4)
+
+        val row5 = row(
+            context,
+            button(context, "收起") { callbacks.onCollapseMiniBar() }
+        )
+        addRow(context, root, row5)
 
         setScripts(root, emptyList())
         return root
@@ -198,22 +219,120 @@ internal object OverlayUi {
         return root
     }
 
+    /**
+     * 迷你条：横条，只放最常用的快捷操作，收起后仍能一键启停。
+     * 内容从左到右：状态文字、开始/停止、展开、收起。
+     */
+    fun createMiniBar(context: Context, callbacks: PanelCallbacks): View {
+        val root = LinearLayout(context)
+        root.orientation = LinearLayout.HORIZONTAL
+        root.gravity = Gravity.CENTER_VERTICAL
+        val pad = dp(context, 8f)
+        root.setPadding(pad, pad, pad, pad)
+        root.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(context, 20f).toFloat()
+            setColor(0xE6222222.toInt())
+            setStroke(dp(context, 1f), 0x66FFFFFF)
+        }
+
+        val statusView = TextView(context).apply {
+            text = "就绪"
+            setTextColor(0xFFB0BEC5.toInt())
+            textSize = 12f
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        root.addView(
+            statusView,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+
+        val toggleButton = miniBarButton(context, "开始") {}
+        root.addView(toggleButton, miniBarButtonLp(context))
+        val expandButton = miniBarButton(context, "展开") { callbacks.onExpandPanel() }
+        root.addView(expandButton, miniBarButtonLp(context))
+        val collapseButton = miniBarButton(context, "收起") { callbacks.onHideToBall() }
+        root.addView(collapseButton, miniBarButtonLp(context))
+
+        val holder = MiniBarHolder(statusView, toggleButton)
+        root.tag = holder
+
+        toggleButton.setOnClickListener {
+            if (holder.running) callbacks.onStopClick() else callbacks.onStartClick(holder.selectedScript)
+        }
+
+        setScripts(root, emptyList())
+        return root
+    }
+
     /** 更新面板中的脚本列表（保留原有选中项，若不存在则选中第一项）。 */
     fun setScripts(panel: View, scripts: List<Script>) {
-        val holder = panel.tag as? PanelHolder ?: return
-        val previousId = holder.selectedScript?.id
-        holder.adapter.clear()
-        holder.scripts = scripts
-        if (scripts.isEmpty()) {
-            holder.selectedIndex = -1
-            holder.adapter.add("（无脚本）")
-        } else {
-            holder.adapter.addAll(scripts.map { it.name })
-            val index = scripts.indexOfFirst { it.id == previousId }
-            holder.selectedIndex = if (index >= 0) index else 0
-            holder.spinner.setSelection(holder.selectedIndex)
+        when (val holder = panel.tag) {
+            is PanelHolder -> {
+                val previousId = holder.selectedScript?.id
+                holder.adapter.clear()
+                holder.scripts = scripts
+                if (scripts.isEmpty()) {
+                    holder.selectedIndex = -1
+                    holder.adapter.add("（无脚本）")
+                } else {
+                    holder.adapter.addAll(scripts.map { it.name })
+                    val index = scripts.indexOfFirst { it.id == previousId }
+                    holder.selectedIndex = if (index >= 0) index else 0
+                    holder.spinner.setSelection(holder.selectedIndex)
+                }
+                holder.adapter.notifyDataSetChanged()
+            }
+            is MiniBarHolder -> {
+                holder.scripts = scripts
+                holder.selectedIndex = if (scripts.isEmpty()) -1 else 0
+            }
         }
-        holder.adapter.notifyDataSetChanged()
+    }
+
+    /** 更新迷你条状态文字，并切换开始/停止按钮的文案。 */
+    fun setMiniBarStatus(miniBar: View, text: String, running: Boolean) {
+        val holder = miniBar.tag as? MiniBarHolder ?: return
+        holder.running = running
+        holder.statusView.text = text
+        holder.toggleButton.text = if (running) "停止" else "开始"
+    }
+
+    /** 更新小球外观与文字：运行时用强调色并在文字上显示进度。 */
+    fun setBallStatus(ball: View, text: String, running: Boolean) {
+        val view = ball as? TextView ?: return
+        val context = view.context
+        if (running) {
+            view.text = text.ifEmpty { "▶" }
+            view.background = circleBackground(context, 0xCC43A047.toInt(), 0x884CAF50.toInt())
+        } else {
+            view.text = "点"
+            view.background = circleBackground(context, 0xCC1E88E5.toInt(), 0x8834B0FF.toInt())
+        }
+    }
+
+    /** 按运行/录制/点击器状态刷新面板按钮的可用性与文案。 */
+    fun setPanelControls(panel: View, runner: RunnerState, recording: Boolean, clickerRunning: Boolean) {
+        val holder = panel.tag as? PanelHolder ?: return
+        val buttons = holder.buttons
+        val active = runner.isActive
+
+        setButtonEnabled(buttons[KEY_START], !active)
+        setButtonEnabled(buttons[KEY_PAUSE], runner is RunnerState.Running)
+        setButtonEnabled(buttons[KEY_RESUME], runner is RunnerState.Paused)
+        setButtonEnabled(buttons[KEY_STOP], active)
+
+        buttons[KEY_START_RECORD]?.text = if (recording) "录制中…" else "开始录制"
+        setButtonEnabled(buttons[KEY_START_RECORD], !recording)
+        setButtonEnabled(buttons[KEY_STOP_RECORD], recording)
+
+        setButtonEnabled(buttons[KEY_CLICKER_MODE], !clickerRunning)
+
+        val busy = active || recording
+        setButtonEnabled(buttons[KEY_REFRESH], !busy)
+        setButtonEnabled(buttons[KEY_CAPTURE_TEMPLATE], !busy)
     }
 
     /** 返回面板当前选中的脚本。 */
@@ -405,6 +524,13 @@ internal object OverlayUi {
             setColor(color)
         }
 
+    private fun circleBackground(context: Context, fill: Int, stroke: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(fill)
+            setStroke(dp(context, 1f), stroke)
+        }
+
     private fun matchWrap(): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -440,6 +566,35 @@ internal object OverlayUi {
         return button
     }
 
+    /** 注册面板按钮到 holder，key 供 [setPanelControls] 查用。 */
+    private fun registerButton(holder: PanelHolder, key: String, button: Button): Button {
+        holder.buttons[key] = button
+        return button
+    }
+
+    /** 同步按钮可用性与禁用视觉。 */
+    private fun setButtonEnabled(button: Button?, enabled: Boolean) {
+        button ?: return
+        button.isEnabled = enabled
+        button.alpha = if (enabled) 1f else 0.45f
+    }
+
+    /** 迷你条按钮：在通用按钮基础上加大水平内边距，避免过于拥挤。 */
+    private fun miniBarButton(context: Context, text: String, onClick: () -> Unit): Button {
+        val button = button(context, text, onClick)
+        button.setPadding(dp(context, 10f), button.paddingTop, dp(context, 10f), button.paddingBottom)
+        return button
+    }
+
+    private fun miniBarButtonLp(context: Context): LinearLayout.LayoutParams {
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        lp.marginStart = dp(context, 6f)
+        return lp
+    }
+
     /** 面板内部状态容器，挂在面板 View 的 tag 上。 */
     private class PanelHolder(
         val statusView: TextView,
@@ -453,6 +608,19 @@ internal object OverlayUi {
         var scripts: List<Script> = emptyList()
         var selectedIndex: Int = -1
         val stepRows: MutableList<View> = mutableListOf()
+        /** 各功能按钮，key 见 KEY_* 常量，供 [setPanelControls] 刷新。 */
+        val buttons: MutableMap<String, Button> = mutableMapOf()
+        val selectedScript: Script? get() = scripts.getOrNull(selectedIndex)
+    }
+
+    /** 迷你条内部状态容器，挂在迷你条 View 的 tag 上。 */
+    private class MiniBarHolder(
+        val statusView: TextView,
+        val toggleButton: Button
+    ) {
+        var scripts: List<Script> = emptyList()
+        var selectedIndex: Int = -1
+        var running: Boolean = false
         val selectedScript: Script? get() = scripts.getOrNull(selectedIndex)
     }
 
