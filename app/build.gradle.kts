@@ -23,8 +23,28 @@ android {
         }
     }
 
+    /**
+     * 固定签名：仓库内置的 keystore（app/keystore/debug.p12），debug 与 release 共用。
+     *
+     * 目的：让每次构建（本地与 CI）使用完全相同的签名，避免覆盖安装时报「软件包与现有软件包存在冲突」。
+     * 说明：这是本项目专用的公开调试密钥，口令固定，仅用于个人调试分发，不适用于正式上架发布。
+     */
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("keystore/debug.p12")
+            storePassword = "android"
+            keyAlias = "autoclicker"
+            keyPassword = "android"
+            storeType = "PKCS12"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
         release {
+            signingConfig = signingConfigs.getByName("fixed")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

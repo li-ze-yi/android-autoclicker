@@ -86,21 +86,26 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # 固定 Debug 签名密钥：AGP 默认使用 ~/.android/debug.keystore，云端每次运行都会重新生成，
-      # 导致不同批次 APK 签名不一致、覆盖安装报「软件包与现有软件包存在冲突」。
-      # 这里用固定 key 缓存该密钥文件，首次运行生成后所有后续构建复用同一份，签名保持一致。
-      # 注意：key 不能包含 gradle 文件 hash，否则文件变动会让 key 变化、缓存未命中而重新生成密钥。
-      - name: 缓存 Debug 签名密钥
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore-v1
-
+      # 签名使用仓库内置的固定 keystore（app/keystore/debug.p12，见 app/build.gradle.kts 的 signingConfigs），
+      # 所有构建的签名天然一致，因此不再需要缓存 ~/.android/debug.keystore。
       - name: 构建 Debug APK
         shell: bash
         run: |
           set -o pipefail
           gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
+
+      # 输出 APK 签名证书指纹并写入环境变量，便于逐次核对前后构建是否同一签名。
+      - name: 输出 APK 签名指纹
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -n 1)
+          echo "APK=$APK" | tee -a build-log.txt
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --print-certs "$APK" > apk-certs.txt 2>&1 || true
+          cat apk-certs.txt | tee -a build-log.txt
+          SHA=$(grep -i "SHA-256 digest" apk-certs.txt | head -n 1 | awk -F': ' '{print $2}')
+          echo "APK_SIGNER_SHA256=$SHA" >> "$GITHUB_ENV"
 
       - name: 上传 APK 为构建产物
         if: success()
@@ -121,6 +126,7 @@ jobs:
 
             - 提交：${{ github.sha }}
             - 触发方式：${{ github.event_name }}
+            - 签名 SHA-256：${{ env.APK_SIGNER_SHA256 }}
           files: app/build/outputs/apk/debug/*.apk
           draft: false
           prerelease: false
