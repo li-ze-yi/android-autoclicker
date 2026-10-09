@@ -1,21 +1,20 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "com.autoclicker"
-    // compileSdk 35 用于启用 AccessibilityService.onMotionEvent（原始触点录制，Android 15+）；
-    // targetSdk 仍保持 34，避免引入新的运行时行为限制。
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.autoclicker"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 35
+        versionCode = 2
+        versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -24,10 +23,9 @@ android {
     }
 
     /**
-     * 固定签名：仓库内置的 keystore（app/keystore/debug.p12），debug 与 release 共用。
-     *
-     * 目的：让每次构建（本地与 CI）使用完全相同的签名，避免覆盖安装时报「软件包与现有软件包存在冲突」。
-     * 说明：这是本项目专用的公开调试密钥，口令固定，仅用于个人调试分发，不适用于正式上架发布。
+     * 固定签名：仓库内置 keystore（app/keystore/debug.p12），debug 与 release 共用，
+     * 保证每次构建（本地与 CI）签名一致，可直接覆盖安装。
+     * 公开调试密钥，仅用于个人调试分发，不适用于正式上架。
      */
     signingConfigs {
         create("fixed") {
@@ -58,16 +56,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
         compose = true
-    }
-
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
     }
 
     packaging {
@@ -78,28 +74,26 @@ android {
 }
 
 dependencies {
-    // Compose BOM 统一管理 Compose 各库版本
     implementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(platform(libs.androidx.compose.bom))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.datastore.preferences)
 
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-
-    androidTestImplementation(libs.androidx.junit)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

@@ -66,15 +66,15 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
           "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" 2>&1 | tee -a build-log.txt
 
-      - name: 安装 Gradle 8.7
+      - name: 安装 Gradle 8.11.1
         shell: bash
         run: |
           set -o pipefail
-          curl -sSL -o gradle-dist.zip "https://services.gradle.org/distributions/gradle-8.7-bin.zip" 2>&1 | tee -a build-log.txt
+          curl -sSL -o gradle-dist.zip "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip" 2>&1 | tee -a build-log.txt
           mkdir -p "$HOME/gradle-dist"
           unzip -q gradle-dist.zip -d "$HOME/gradle-dist" 2>&1 | tee -a build-log.txt
-          echo "$HOME/gradle-dist/gradle-8.7/bin" >> "$GITHUB_PATH"
-          "$HOME/gradle-dist/gradle-8.7/bin/gradle" --version 2>&1 | tee -a build-log.txt
+          echo "$HOME/gradle-dist/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+          "$HOME/gradle-dist/gradle-8.11.1/bin/gradle" --version 2>&1 | tee -a build-log.txt
 
       - name: 缓存 Gradle 依赖
         uses: actions/cache@v4

@@ -1,17 +1,8 @@
 package com.autoclicker
 
 import android.app.Application
-import com.autoclicker.core.recorder.ScriptRecorder
 
 /**
- * 应用级 Application 入口。
- * 后续可在此初始化日志、依赖容器等全局设施。
+ * 应用入口。V2 全新架构：后续在此初始化通知渠道、数据层与状态中枢。
  */
-class MyApplication : Application() {
-
-    override fun onCreate() {
-        super.onCreate()
-        // 恢复录制器的持久化开关（精确模式）。
-        ScriptRecorder.initialize(this)
-    }
-}
+class MyApplication : Application()
