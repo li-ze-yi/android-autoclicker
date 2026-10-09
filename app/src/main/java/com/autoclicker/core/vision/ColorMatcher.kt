@@ -3,7 +3,6 @@ package com.autoclicker.core.vision
 import android.graphics.Bitmap
 import android.graphics.Rect
 import kotlin.math.abs
-import kotlin.math.min
 
 /**
  * 颜色匹配器：按步长在指定区域内扫描目标颜色。
@@ -17,7 +16,7 @@ object ColorMatcher {
      *
      * @param region  null 或宽/高 <= 0 表示全屏；否则与屏幕取交集。
      * @param stepPx  采样步长，最小按 1 处理。
-     * @return 命中返回该像素整屏坐标与相似度，未命中返回 null。
+     * @return 命中返回该像素整屏坐标，未命中返回 null。
      */
     fun findColor(
         screen: Bitmap,
@@ -57,9 +56,7 @@ object ColorMatcher {
                     val dg = abs(((c shr 8) and 0xFF) - targetG)
                     val db = abs((c and 0xFF) - targetB)
                     if (dr <= tol && dg <= tol && db <= tol) {
-                        val minDiff = min(dr, min(dg, db))
-                        val similarity = 1f - minDiff / 255f
-                        return MatchResult(rect.left + x, rect.top + y, similarity)
+                        return MatchResult(rect.left + x, rect.top + y)
                     }
                     x += step
                 }

@@ -2,14 +2,18 @@ package com.autoclicker.ui.editor
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
 import com.autoclicker.core.script.Step
 import com.autoclicker.core.script.withDelay
 import com.autoclicker.core.script.withNewId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 脚本编辑器状态容器。持有可变的 [Script]，所有编辑操作都产生新的不可变副本。
@@ -26,9 +30,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     /** 按 id 载入脚本；同一 id 重复调用不会覆盖正在编辑的内容。 */
     fun load(id: String) {
         if (loadedId == id && _script.value != null) return
+        // 置位在发起加载时完成，避免重复加载。
         loadedId = id
-        val loaded = repository.load(id)
-        _script.value = loaded ?: Script.create("新脚本").copy(id = id)
+        viewModelScope.launch {
+            // 文件 IO 放到 IO 线程，避免阻塞主线程。
+            val loaded = withContext(Dispatchers.IO) { repository.load(id) }
+            // 加载期间又切换了目标脚本，丢弃过期结果。
+            if (loadedId != id) return@launch
+            _script.value = loaded ?: Script.create("新脚本").copy(id = id)
+        }
     }
 
     fun addStep(step: Step) {

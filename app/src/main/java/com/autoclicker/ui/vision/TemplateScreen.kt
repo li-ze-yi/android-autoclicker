@@ -195,9 +195,13 @@ fun TemplateScreen(onBack: () -> Unit) {
 
     val pendingCapture by VisionBridge.pendingCapture.collectAsState()
 
+    // 模板列表为文件 IO，放到 IO 线程，回到主线程再写入状态。
     val reload: () -> Unit = {
-        templates = repository.list()
-        captureReady = ScreenCaptureService.isReady
+        scope.launch {
+            val loaded = withContext(Dispatchers.IO) { repository.list() }
+            templates = loaded
+            captureReady = ScreenCaptureService.isReady
+        }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current

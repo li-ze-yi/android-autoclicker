@@ -12,5 +12,5 @@ data class ImageTemplate(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-/** 匹配结果：命中位置的整屏坐标中心点与相似度（0f~1f）。 */
-data class MatchResult(val centerX: Int, val centerY: Int, val similarity: Float)
+/** 匹配结果：命中位置的整屏坐标中心点。 */
+data class MatchResult(val centerX: Int, val centerY: Int)

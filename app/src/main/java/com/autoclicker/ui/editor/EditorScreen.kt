@@ -1156,7 +1156,7 @@ private fun StepEditDialog(
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     } else {
-                                        RegionPickerBridge.request(step.id)
+                                        RegionPickerBridge.request()
                                         OverlayService.startRegionPick(context)
                                     }
                                 },

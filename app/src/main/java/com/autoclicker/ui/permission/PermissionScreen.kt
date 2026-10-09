@@ -29,6 +29,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,10 +38,14 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
 import com.autoclicker.core.trigger.NotificationTrigger
 import com.autoclicker.core.trigger.NotificationTriggerStore
 import com.autoclicker.core.util.PermissionChecker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,16 +150,27 @@ fun PermissionScreen(onBack: () -> Unit) {
 @Composable
 private fun NotificationTriggerCard() {
     val context = LocalContext.current
-    val scripts = remember { ScriptRepository.get(context).listScripts() }
+    val scope = rememberCoroutineScope()
+    var scripts by remember { mutableStateOf<List<Script>>(emptyList()) }
     var config by remember { mutableStateOf(NotificationTriggerStore.load(context)) }
     var granted by remember { mutableStateOf(PermissionChecker.isNotificationAccessGranted(context)) }
     var menuOpen by remember { mutableStateOf(false) }
 
+    // 脚本列表为文件 IO，放到 IO 线程，回到主线程再写入状态。
+    val reloadScripts: () -> Unit = {
+        scope.launch {
+            val loaded = withContext(Dispatchers.IO) { ScriptRepository.get(context).listScripts() }
+            scripts = loaded
+        }
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
+        reloadScripts()
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 granted = PermissionChecker.isNotificationAccessGranted(context)
+                reloadScripts()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

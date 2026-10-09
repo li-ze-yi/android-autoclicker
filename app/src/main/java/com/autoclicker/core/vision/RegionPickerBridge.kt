@@ -7,15 +7,11 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /** 悬浮窗框选「识图搜索区域」的桥接。 */
 object RegionPickerBridge {
-    /** 正在为哪个步骤框选（步骤 id）。 */
-    @Volatile
-    var targetStepId: String? = null
-
     private val _result = MutableStateFlow<Rect?>(null)
     val result: StateFlow<Rect?> = _result.asStateFlow()
 
-    fun request(stepId: String) {
-        targetStepId = stepId
+    /** 开始一次框选：清空上一次结果，等待 [publish]。 */
+    fun request() {
         _result.value = null
     }
 
@@ -23,16 +19,10 @@ object RegionPickerBridge {
         _result.value = rect
     }
 
-    /** 取出并清空；同时清掉 targetStepId。 */
+    /** 取出并清空。 */
     fun consume(): Rect? {
         val r = _result.value
         _result.value = null
-        targetStepId = null
         return r
-    }
-
-    fun clear() {
-        _result.value = null
-        targetStepId = null
     }
 }

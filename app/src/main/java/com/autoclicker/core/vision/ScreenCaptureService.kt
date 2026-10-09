@@ -2,7 +2,6 @@ package com.autoclicker.core.vision
 
 import android.app.Activity
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
@@ -24,6 +23,7 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.autoclicker.R
+import com.autoclicker.core.util.NotificationChannels
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,15 +69,6 @@ class ScreenCaptureService : Service() {
             )
         }
 
-        /** 停止截屏服务。 */
-        fun stop(context: Context) {
-            try {
-                context.stopService(Intent(context, ScreenCaptureService::class.java))
-            } catch (e: Exception) {
-                // 忽略
-            }
-        }
-
         /**
          * 抓取当前屏幕。
          *
@@ -109,7 +100,6 @@ class ScreenCaptureService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private var handlerThread: HandlerThread? = null
-    private var handler: Handler? = null
 
     /** 通道就绪：清空历史错误。 */
     private fun markReady() {
@@ -197,7 +187,6 @@ class ScreenCaptureService : Service() {
             val thread = HandlerThread("screen-capture").also { it.start() }
             handlerThread = thread
             val threadHandler = Handler(thread.looper)
-            handler = threadHandler
 
             // Android 14：投影被系统终止时必须清理并停止服务。
             projection.registerCallback(object : MediaProjection.Callback() {
@@ -261,7 +250,6 @@ class ScreenCaptureService : Service() {
             // 忽略
         }
         handlerThread = null
-        handler = null
         super.onDestroy()
     }
 
@@ -368,10 +356,8 @@ class ScreenCaptureService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "识图截屏", NotificationManager.IMPORTANCE_LOW)
-        )
+        // 统一由 NotificationChannels 创建渠道，失败也继续构建通知。
+        NotificationChannels.ensure(this, CHANNEL_ID, "识图截屏", NotificationManager.IMPORTANCE_LOW)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("自动点击助手")

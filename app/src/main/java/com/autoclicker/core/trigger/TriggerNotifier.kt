@@ -1,15 +1,14 @@
 package com.autoclicker.core.trigger
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.autoclicker.R
+import com.autoclicker.core.util.NotificationChannels
 
 /**
  * 定时任务相关通知。
@@ -21,20 +20,7 @@ object TriggerNotifier {
 
     /** 创建通知渠道（API 26+）。 */
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                val manager =
-                    context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                val channel = NotificationChannel(
-                    CHANNEL_ID,
-                    "定时任务",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-                manager.createNotificationChannel(channel)
-            } catch (e: Exception) {
-                // 忽略渠道创建异常
-            }
-        }
+        NotificationChannels.ensure(context, CHANNEL_ID, "定时任务", NotificationManager.IMPORTANCE_DEFAULT)
     }
 
     /** 提示无障碍服务未开启导致脚本未执行。 */

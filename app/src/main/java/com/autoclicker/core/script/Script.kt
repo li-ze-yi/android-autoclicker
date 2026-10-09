@@ -13,7 +13,6 @@ data class Script(
     val loopIntervalMs: Long = 0L,
     val jitterRadiusPx: Int = 0,
     val jitterDelayPercent: Int = 0,
-    val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
     companion object {

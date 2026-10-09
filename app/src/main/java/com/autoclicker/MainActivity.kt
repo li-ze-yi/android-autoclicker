@@ -70,7 +70,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val EXTRA_OPEN_ROUTE = "open_route"
+        /** 打开指定路由的 Intent extra 键；供悬浮窗等服务与 [MainActivity] 共用，避免字面量重复。 */
+        const val EXTRA_OPEN_ROUTE = "open_route"
         private const val VALUE_VISION = "vision"
     }
 }

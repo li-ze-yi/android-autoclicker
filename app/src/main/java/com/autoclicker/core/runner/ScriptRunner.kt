@@ -5,7 +5,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
-import android.view.accessibility.AccessibilityNodeInfo
 import com.autoclicker.core.accessibility.GestureExecutor
 import com.autoclicker.core.accessibility.GlobalActions
 import com.autoclicker.core.accessibility.NodeFinder
@@ -90,9 +89,10 @@ object ScriptRunner {
         return true
     }
 
-    /** 暂停执行，仅在 Running 时生效；状态由执行循环更新为 Paused。 */
+    /** 暂停执行，仅在未暂停的运行状态生效；状态由执行循环更新。 */
     fun pause() {
-        if (_state.value is RunnerState.Running) {
+        val current = _state.value
+        if (current is RunnerState.Running && !current.paused) {
             paused.value = true
         }
     }
@@ -104,11 +104,7 @@ object ScriptRunner {
 
     /** 停止执行并取消协程，状态置为已停止。 */
     fun stop() {
-        val scriptName = when (val current = _state.value) {
-            is RunnerState.Running -> current.scriptName
-            is RunnerState.Paused -> current.scriptName
-            else -> null
-        }
+        val scriptName = (_state.value as? RunnerState.Running)?.scriptName
         stopRequested = true
         job?.cancel()
         paused.value = false
@@ -158,8 +154,9 @@ object ScriptRunner {
                     val stepText = step.describe()
 
                     if (paused.value) {
-                        _state.value = RunnerState.Paused(
-                            script.id, script.name, pc, total, stepText, loopIndex, totalLoops
+                        _state.value = RunnerState.Running(
+                            script.id, script.name, pc, total, stepText, loopIndex, totalLoops,
+                            paused = true
                         )
                         paused.first { !it }
                     }
@@ -270,14 +267,28 @@ object ScriptRunner {
         return map
     }
 
-    /** 把文本中的 `${变量名}` 替换为变量值（P3）。 */
+    /** 把文本中的 `${变量名}` 替换为变量值（P3）。单遍从左到右扫描，替换后的值不再参与匹配。 */
     private fun interpolate(text: String, vars: Map<String, String>): String {
         if (text.indexOf('$') < 0 || vars.isEmpty()) return text
-        var result = text
-        for ((key, value) in vars) {
-            result = result.replace("\${$key}", value)
+        val builder = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (c == '$' && i + 1 < text.length && text[i + 1] == '{') {
+                val end = text.indexOf('}', i + 2)
+                if (end >= 0) {
+                    val value = vars[text.substring(i + 2, end)]
+                    if (value != null) {
+                        builder.append(value)
+                        i = end + 1
+                        continue
+                    }
+                }
+            }
+            builder.append(c)
+            i++
         }
-        return result
+        return builder.toString()
     }
 
     /** 求值条件（P3）。 */
@@ -293,7 +304,7 @@ object ScriptRunner {
                 )
                 val node = NodeFinder.awaitNode(selector, condition.timeoutMs)
                 val found = node != null
-                recycleNode(node)
+                node?.let { NodeFinder.recycleQuietly(it) }
                 found
             }
 
@@ -475,7 +486,7 @@ object ScriptRunner {
                         return PointF(rect.left + rect.width() * rx, rect.top + rect.height() * ry)
                     }
                 } finally {
-                    recycleNode(node)
+                    NodeFinder.recycleQuietly(node)
                 }
             }
         }
@@ -508,7 +519,7 @@ object ScriptRunner {
         )
         val node = NodeFinder.awaitNode(selector, step.timeoutMs)
         val found = node != null
-        recycleNode(node)
+        node?.let { NodeFinder.recycleQuietly(it) }
         return if (found) {
             delay(200)
             StepResult(true, "元素已出现")
@@ -559,7 +570,7 @@ object ScriptRunner {
         val node = NodeFinder.awaitNode(selector, step.timeoutMs)
             ?: return timeoutResult(step.onTimeout, "智能定位超时")
         val center = NodeFinder.centerOf(node)
-        recycleNode(node)
+        NodeFinder.recycleQuietly(node)
         val x = jitterCoordinate(center.x, script.jitterRadiusPx)
         val y = jitterCoordinate(center.y, script.jitterRadiusPx)
         return if (GestureExecutor.click(x, y)) {
@@ -676,16 +687,6 @@ object ScriptRunner {
         } else {
             StepResult(false, message)
         }
-
-    /** 安全回收无障碍节点，重复回收或已回收时忽略异常。 */
-    @Suppress("DEPRECATION")
-    private fun recycleNode(node: AccessibilityNodeInfo?) {
-        try {
-            node?.recycle()
-        } catch (e: Exception) {
-            // 忽略回收异常
-        }
-    }
 
     /** 坐标拟人化扰动：偏移量在 [-radius, radius] 内随机，偏移后不小于 0。 */
     private fun jitterCoordinate(value: Float, radius: Int): Float {

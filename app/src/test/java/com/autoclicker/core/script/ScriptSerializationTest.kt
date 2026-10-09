@@ -146,7 +146,6 @@ class ScriptSerializationTest {
             name = "全部类型",
             steps = allStepTypes(),
             stopOnError = false,
-            createdAt = 1700000000000L,
             updatedAt = 1700000001000L
         )
 
@@ -214,7 +213,6 @@ class ScriptSerializationTest {
             name = "空脚本",
             steps = emptyList(),
             stopOnError = true,
-            createdAt = 100L,
             updatedAt = 200L
         )
 
@@ -244,7 +242,6 @@ class ScriptSerializationTest {
             loopIntervalMs = 500L,
             jitterRadiusPx = 6,
             jitterDelayPercent = 15,
-            createdAt = 1700000000000L,
             updatedAt = 1700000001000L
         )
 

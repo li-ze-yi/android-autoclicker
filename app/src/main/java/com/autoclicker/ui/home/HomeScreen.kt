@@ -208,12 +208,21 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 } else {
                     Button(
                         onClick = {
-                            ScriptRecorder.start()
-                            Toast.makeText(
-                                context,
-                                "开始录制，请操作目标应用",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            if (!PermissionChecker.isAccessibilityEnabled(context)) {
+                                Toast.makeText(
+                                    context,
+                                    "请先开启无障碍服务",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                PermissionChecker.openAccessibilitySettings(context)
+                            } else {
+                                ScriptRecorder.start()
+                                Toast.makeText(
+                                    context,
+                                    "开始录制，请操作目标应用",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {

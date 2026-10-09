@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
@@ -12,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -363,8 +365,8 @@ internal object OverlayUi {
         val active = runner.isActive
 
         setButtonEnabled(buttons[KEY_START], !active)
-        setButtonEnabled(buttons[KEY_PAUSE], runner is RunnerState.Running)
-        setButtonEnabled(buttons[KEY_RESUME], runner is RunnerState.Paused)
+        setButtonEnabled(buttons[KEY_PAUSE], runner is RunnerState.Running && !runner.paused)
+        setButtonEnabled(buttons[KEY_RESUME], runner is RunnerState.Running && runner.paused)
         setButtonEnabled(buttons[KEY_STOP], active)
 
         buttons[KEY_START_RECORD]?.text = if (recording) "录制中…" else "开始录制"
@@ -475,16 +477,13 @@ internal object OverlayUi {
     fun formatStatus(state: RunnerState, recording: Boolean, stepCount: Int): String {
         val base = when (state) {
             is RunnerState.Idle -> "就绪"
-            is RunnerState.Running ->
-                "运行中：" + progress(
+            is RunnerState.Running -> {
+                val prefix = if (state.paused) "已暂停：" else "运行中："
+                prefix + progress(
                     state.scriptName, state.stepIndex, state.totalSteps,
                     state.loopIndex, state.totalLoops
                 ) + "｜${state.stepText}"
-            is RunnerState.Paused ->
-                "已暂停：" + progress(
-                    state.scriptName, state.stepIndex, state.totalSteps,
-                    state.loopIndex, state.totalLoops
-                ) + "｜${state.stepText}"
+            }
             is RunnerState.Finished -> {
                 val result = if (state.success) "成功" else "失败"
                 val detail = state.message?.let { "：$it" } ?: ""
@@ -584,19 +583,20 @@ internal object OverlayUi {
             setStroke(dp(context, 1f), stroke)
         }
 
-    private fun matchWrap(): LinearLayout.LayoutParams =
+    /** 匹配父宽、包裹内容高的通用布局参数。 */
+    internal fun matchWrap(): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
 
-    private fun addRow(context: Context, root: LinearLayout, row: View) {
+    internal fun addRow(context: Context, root: LinearLayout, row: View) {
         val lp = matchWrap()
         lp.topMargin = dp(context, 6f)
         root.addView(row, lp)
     }
 
-    private fun row(context: Context, vararg views: View): LinearLayout {
+    internal fun row(context: Context, vararg views: View): LinearLayout {
         val container = LinearLayout(context)
         container.orientation = LinearLayout.HORIZONTAL
         views.forEachIndexed { index, view ->
@@ -607,7 +607,7 @@ internal object OverlayUi {
         return container
     }
 
-    private fun button(context: Context, text: String, onClick: () -> Unit): Button {
+    internal fun button(context: Context, text: String, onClick: () -> Unit): Button {
         val button = Button(context)
         button.text = text
         button.textSize = 12f
@@ -617,6 +617,26 @@ internal object OverlayUi {
         button.setPadding(0, button.paddingTop, 0, button.paddingBottom)
         button.setOnClickListener { onClick() }
         return button
+    }
+
+    /** 数字输入框：允许小数与正负号。 */
+    internal fun numberField(context: Context, initial: String): EditText = EditText(context).apply {
+        inputType = InputType.TYPE_CLASS_NUMBER or
+            InputType.TYPE_NUMBER_FLAG_DECIMAL or
+            InputType.TYPE_NUMBER_FLAG_SIGNED
+        setText(initial)
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setHintTextColor(0xFF78909C.toInt())
+    }
+
+    /** 普通文本输入框。 */
+    internal fun textField(context: Context, initial: String): EditText = EditText(context).apply {
+        inputType = InputType.TYPE_CLASS_TEXT
+        setText(initial)
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setHintTextColor(0xFF78909C.toInt())
     }
 
     /** 注册面板按钮到 holder，key 供 [setPanelControls] 查用。 */

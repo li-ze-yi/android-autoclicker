@@ -5,7 +5,6 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -30,9 +29,6 @@ internal object OverlayStepEditor {
 
     private var editorView: View? = null
 
-    /** 当前是否有编辑窗口在显示。 */
-    val isShowing: Boolean get() = editorView != null
-
     /** 显示编辑窗口。[onConfirm] 在点击「确定」且解析成功后回调。 */
     fun show(
         context: Context,
@@ -45,12 +41,12 @@ internal object OverlayStepEditor {
 
         val root = LinearLayout(context)
         root.orientation = LinearLayout.VERTICAL
-        root.setPadding(dp(context, 14f), dp(context, 12f), dp(context, 14f), dp(context, 12f))
+        root.setPadding(OverlayUi.dp(context, 14f), OverlayUi.dp(context, 12f), OverlayUi.dp(context, 14f), OverlayUi.dp(context, 12f))
         root.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(context, 12f).toFloat()
+            cornerRadius = OverlayUi.dp(context, 12f).toFloat()
             setColor(0xF0222222.toInt())
-            setStroke(dp(context, 1f), 0x66FFFFFF)
+            setStroke(OverlayUi.dp(context, 1f), 0x66FFFFFF)
         }
 
         val title = TextView(context).apply {
@@ -60,7 +56,7 @@ internal object OverlayStepEditor {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
-        root.addView(title, matchWrap())
+        root.addView(title, OverlayUi.matchWrap())
 
         val fields = LinearLayout(context)
         fields.orientation = LinearLayout.VERTICAL
@@ -89,13 +85,13 @@ internal object OverlayStepEditor {
                 text = hint
                 setTextColor(0xFF90A4AE.toInt())
                 textSize = 13f
-                setPadding(0, dp(context, 6f), 0, 0)
+                setPadding(0, OverlayUi.dp(context, 6f), 0, 0)
             }
-            fields.addView(tv, matchWrap())
+            fields.addView(tv, OverlayUi.matchWrap())
         }
 
         fun addField(key: String, label: String, initial: String, numeric: Boolean) {
-            val edit = if (numeric) numberField(context, initial) else textField(context, initial)
+            val edit = if (numeric) OverlayUi.numberField(context, initial) else OverlayUi.textField(context, initial)
             inputs[key] = edit
             val rowView = LinearLayout(context)
             rowView.orientation = LinearLayout.HORIZONTAL
@@ -104,7 +100,7 @@ internal object OverlayStepEditor {
                 setTextColor(0xFFB0BEC5.toInt())
                 textSize = 13f
                 gravity = Gravity.CENTER_VERTICAL
-                minWidth = dp(context, 96f)
+                minWidth = OverlayUi.dp(context, 96f)
             }
             rowView.addView(tv, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -115,8 +111,8 @@ internal object OverlayStepEditor {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
             ))
-            val lp = matchWrap()
-            lp.topMargin = dp(context, 4f)
+            val lp = OverlayUi.matchWrap()
+            lp.topMargin = OverlayUi.dp(context, 4f)
             fields.addView(rowView, lp)
         }
 
@@ -431,10 +427,10 @@ internal object OverlayStepEditor {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
-        val capHeight = (metrics.heightPixels - dp(context, 260f)).coerceAtLeast(dp(context, 160f))
-        val scrollLp = matchWrap()
+        val capHeight = (metrics.heightPixels - OverlayUi.dp(context, 260f)).coerceAtLeast(OverlayUi.dp(context, 160f))
+        val scrollLp = OverlayUi.matchWrap()
         scrollLp.height = capHeight
-        scrollLp.topMargin = dp(context, 8f)
+        scrollLp.topMargin = OverlayUi.dp(context, 8f)
         root.addView(scroll, scrollLp)
 
         val buttons = LinearLayout(context)
@@ -462,14 +458,14 @@ internal object OverlayStepEditor {
         val cancelLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         buttons.addView(cancel, cancelLp)
         val confirmLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        confirmLp.marginStart = dp(context, 8f)
+        confirmLp.marginStart = OverlayUi.dp(context, 8f)
         buttons.addView(confirm, confirmLp)
-        val buttonsLp = matchWrap()
-        buttonsLp.topMargin = dp(context, 8f)
+        val buttonsLp = OverlayUi.matchWrap()
+        buttonsLp.topMargin = OverlayUi.dp(context, 8f)
         root.addView(buttons, buttonsLp)
 
-        val width = dp(context, 300f)
-            .coerceAtMost((metrics.widthPixels - dp(context, 32f)).coerceAtLeast(dp(context, 200f)))
+        val width = OverlayUi.dp(context, 300f)
+            .coerceAtMost((metrics.widthPixels - OverlayUi.dp(context, 32f)).coerceAtLeast(OverlayUi.dp(context, 200f)))
 
         val params = WindowManager.LayoutParams(
             width,
@@ -483,7 +479,7 @@ internal object OverlayStepEditor {
         params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         params.x = ((metrics.widthPixels - width) / 2).coerceAtLeast(0)
-        params.y = dp(context, 60f)
+        params.y = OverlayUi.dp(context, 60f)
 
         try {
             windowManager.addView(root, params)
@@ -506,24 +502,6 @@ internal object OverlayStepEditor {
 
     // ---- 字段构建与解析 ----
 
-    private fun numberField(context: Context, initial: String): EditText = EditText(context).apply {
-        inputType = InputType.TYPE_CLASS_NUMBER or
-            InputType.TYPE_NUMBER_FLAG_DECIMAL or
-            InputType.TYPE_NUMBER_FLAG_SIGNED
-        setText(initial)
-        textSize = 14f
-        setTextColor(Color.WHITE)
-        setHintTextColor(0xFF78909C.toInt())
-    }
-
-    private fun textField(context: Context, initial: String): EditText = EditText(context).apply {
-        inputType = InputType.TYPE_CLASS_TEXT
-        setText(initial)
-        textSize = 14f
-        setTextColor(Color.WHITE)
-        setHintTextColor(0xFF78909C.toInt())
-    }
-
     /** 颜色的可读回填文本，便于与十进制/十六进制两种写法互转。 */
     private fun colorText(color: Int): String = color.toString()
 
@@ -540,13 +518,4 @@ internal object OverlayStepEditor {
             else -> t.toLongOrNull()?.toInt() ?: t.toLongOrNull(16)?.toInt()
         }
     }
-
-    private fun matchWrap(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-
-    private fun dp(context: Context, value: Float): Int =
-        (value * context.resources.displayMetrics.density).toInt()
 }

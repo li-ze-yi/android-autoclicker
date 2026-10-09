@@ -31,8 +31,8 @@ import kotlinx.coroutines.withContext
  *
  * 默认走无障碍事件路径（[onAccessibilityEvent]）：点击/长按取控件包围盒中心作为坐标，
  * 滚动换算为近似滑动，并用系统时钟测量动作之间的间隔写入下一步的 `delayBeforeMs`。
- * [onRawTouch] 为原始触点入口，当前无调用方（`AccessibilityService.onMotionEvent` 不在公开 SDK 中，
- * 无法在第三方 App 内覆盖），保留以备后续接入。
+ * [onRawTouch] 为原始触点入口，当前无调用方（`AccessibilityService.onMotionEvent` 自 Android 14/API 34
+ * 起虽是公开回调，但需配合 `setMotionEventSources` 且会接管触摸探索交互，本项目未接入），保留以备后续使用。
  *
  * 精确录制模式（[preciseMode]）下改为走采集层路径（[onCaptureTouch]）：由覆盖在屏幕上的全屏可触摸
  * 采集层把触摸事件吞下来，逐点精确记录，并在抬手后回放同款手势给下方的目标 App。此模式下
@@ -544,7 +544,7 @@ object ScriptRecorder {
                 )
             )
         } finally {
-            recycleQuietly(source)
+            NodeFinder.recycleQuietly(source)
         }
     }
 
@@ -572,7 +572,7 @@ object ScriptRecorder {
                 )
             )
         } finally {
-            recycleQuietly(source)
+            NodeFinder.recycleQuietly(source)
         }
     }
 
@@ -611,7 +611,7 @@ object ScriptRecorder {
         try {
             recordScrollFrom(event, source)
         } finally {
-            recycleQuietly(source)
+            NodeFinder.recycleQuietly(source)
         }
     }
 
@@ -691,16 +691,6 @@ object ScriptRecorder {
 
         append(swipe)
         lastSwipeAt = now
-    }
-
-    /** 安全回收无障碍节点：重复回收或框架已回收时忽略异常。 */
-    @Suppress("DEPRECATION")
-    private fun recycleQuietly(node: AccessibilityNodeInfo) {
-        try {
-            node.recycle()
-        } catch (e: Exception) {
-            // 忽略回收异常
-        }
     }
 
     /** 偏移量取区域长/宽的四分之一，并限制在 [120, 400] px。 */

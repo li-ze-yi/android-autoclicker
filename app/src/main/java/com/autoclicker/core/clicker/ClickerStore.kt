@@ -34,15 +34,6 @@ internal class ClickerStore(context: Context) {
         }
     }
 
-    /** 清除已保存的配置。 */
-    fun clear() {
-        try {
-            prefs.edit().remove(KEY_CONFIG).apply()
-        } catch (e: Exception) {
-            // 忽略清除异常
-        }
-    }
-
     private companion object {
         const val PREFS_NAME = "autoclicker_clicker"
         const val KEY_CONFIG = "config"

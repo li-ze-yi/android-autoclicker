@@ -36,6 +36,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +53,9 @@ import com.autoclicker.core.util.PermissionChecker
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
@@ -62,13 +66,20 @@ private fun formatTime(timestamp: Long): String = timeFormat.format(Date(timesta
 fun ScriptListScreen(onOpenScript: (String) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val repository = remember { ScriptRepository.get(context) }
+    val scope = rememberCoroutineScope()
 
     var scripts by remember { mutableStateOf<List<Script>>(emptyList()) }
     var openMenuId by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<Script?>(null) }
     var deleteTarget by remember { mutableStateOf<Script?>(null) }
 
-    val reload: () -> Unit = { scripts = repository.listScripts() }
+    // 文件 IO 放到 IO 线程，回到主线程再写入状态。
+    val reload: () -> Unit = {
+        scope.launch {
+            val loaded = withContext(Dispatchers.IO) { repository.listScripts() }
+            scripts = loaded
+        }
+    }
 
     val runScript: (Script) -> Unit = { script ->
         if (!AutoAccessService.isConnected) {

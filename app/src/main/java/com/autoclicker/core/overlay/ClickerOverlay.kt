@@ -5,7 +5,6 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -56,9 +55,6 @@ internal object ClickerOverlay {
 
     private var pointEditorView: View? = null
     private var loopSettingsView: View? = null
-
-    /** 是否有编辑小窗在显示。 */
-    val isEditorShowing: Boolean get() = pointEditorView != null || loopSettingsView != null
 
     /** 全屏标记层：可触摸，点击空白处添加点，标记可拖动、点击可编辑。 */
     fun createMarkerLayer(context: Context, callbacks: Callbacks): View {
@@ -142,7 +138,7 @@ internal object ClickerOverlay {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
-        bar.addView(title, matchWrap())
+        bar.addView(title, OverlayUi.matchWrap())
 
         val statusView = TextView(context).apply {
             text = "就绪"
@@ -150,23 +146,23 @@ internal object ClickerOverlay {
             textSize = 12f
             setPadding(0, OverlayUi.dp(context, 6f), 0, OverlayUi.dp(context, 6f))
         }
-        bar.addView(statusView, matchWrap())
+        bar.addView(statusView, OverlayUi.matchWrap())
 
-        val startButton = button(context, "开始") { callbacks.onStartClicker() }
-        val stopButton = button(context, "停止") { callbacks.onStopClicker() }
+        val startButton = OverlayUi.button(context, "开始") { callbacks.onStartClicker() }
+        val stopButton = OverlayUi.button(context, "停止") { callbacks.onStopClicker() }
         stopButton.isEnabled = false
-        val clearButton = button(context, "清空") { callbacks.onClearPoints() }
+        val clearButton = OverlayUi.button(context, "清空") { callbacks.onClearPoints() }
 
-        val row1 = row(context, startButton, stopButton, clearButton)
-        addRow(context, bar, row1)
+        val row1 = OverlayUi.row(context, startButton, stopButton, clearButton)
+        OverlayUi.addRow(context, bar, row1)
 
-        val row2 = row(
+        val row2 = OverlayUi.row(
             context,
-            button(context, "循环设置") { callbacks.onLoopSettings(currentConfig(root)) },
-            button(context, "导出脚本") { callbacks.onExportScript() },
-            button(context, "退出") { callbacks.onExitClicker() }
+            OverlayUi.button(context, "循环设置") { callbacks.onLoopSettings(currentConfig(root)) },
+            OverlayUi.button(context, "导出脚本") { callbacks.onExportScript() },
+            OverlayUi.button(context, "退出") { callbacks.onExitClicker() }
         )
-        addRow(context, bar, row2)
+        OverlayUi.addRow(context, bar, row2)
 
         root.tag = ControlHolder(statusView, startButton, stopButton)
         return root
@@ -257,10 +253,10 @@ internal object ClickerOverlay {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
-        root.addView(title, matchWrap())
+        root.addView(title, OverlayUi.matchWrap())
 
-        val delayEdit = numberField(context, point.delayBeforeMs.toString())
-        val durationEdit = numberField(context, point.touchDurationMs.toString())
+        val delayEdit = OverlayUi.numberField(context, point.delayBeforeMs.toString())
+        val durationEdit = OverlayUi.numberField(context, point.touchDurationMs.toString())
         addField(context, root, "间隔(ms)", delayEdit)
         addField(context, root, "触摸时长(ms)", durationEdit)
 
@@ -310,7 +306,7 @@ internal object ClickerOverlay {
         val confirmLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         confirmLp.marginStart = OverlayUi.dp(context, 8f)
         buttons.addView(confirm, confirmLp)
-        val buttonsLp = matchWrap()
+        val buttonsLp = OverlayUi.matchWrap()
         buttonsLp.topMargin = OverlayUi.dp(context, 8f)
         root.addView(buttons, buttonsLp)
 
@@ -355,7 +351,7 @@ internal object ClickerOverlay {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
-        root.addView(title, matchWrap())
+        root.addView(title, OverlayUi.matchWrap())
 
         val infiniteBox = CheckBox(context).apply {
             text = "无限循环"
@@ -363,12 +359,12 @@ internal object ClickerOverlay {
             textSize = 13f
             isChecked = config.loopInfinite
         }
-        val boxLp = matchWrap()
+        val boxLp = OverlayUi.matchWrap()
         boxLp.topMargin = OverlayUi.dp(context, 4f)
         root.addView(infiniteBox, boxLp)
 
-        val countEdit = numberField(context, config.loopCount.toString())
-        val intervalEdit = numberField(context, config.loopIntervalMs.toString())
+        val countEdit = OverlayUi.numberField(context, config.loopCount.toString())
+        val intervalEdit = OverlayUi.numberField(context, config.loopIntervalMs.toString())
         addField(context, root, "循环次数", countEdit)
         addField(context, root, "循环间隔(ms)", intervalEdit)
 
@@ -400,7 +396,7 @@ internal object ClickerOverlay {
         val confirmLp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         confirmLp.marginStart = OverlayUi.dp(context, 8f)
         buttons.addView(confirm, confirmLp)
-        val buttonsLp = matchWrap()
+        val buttonsLp = OverlayUi.matchWrap()
         buttonsLp.topMargin = OverlayUi.dp(context, 8f)
         root.addView(buttons, buttonsLp)
 
@@ -581,54 +577,9 @@ internal object ClickerOverlay {
             edit,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
-        val lp = matchWrap()
+        val lp = OverlayUi.matchWrap()
         lp.topMargin = OverlayUi.dp(context, 4f)
         parent.addView(rowView, lp)
-    }
-
-    private fun numberField(context: Context, initial: String): EditText = EditText(context).apply {
-        inputType = InputType.TYPE_CLASS_NUMBER or
-            InputType.TYPE_NUMBER_FLAG_DECIMAL or
-            InputType.TYPE_NUMBER_FLAG_SIGNED
-        setText(initial)
-        textSize = 14f
-        setTextColor(Color.WHITE)
-        setHintTextColor(0xFF78909C.toInt())
-    }
-
-    private fun matchWrap(): LinearLayout.LayoutParams =
-        LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-
-    private fun addRow(context: Context, root: LinearLayout, row: View) {
-        val lp = matchWrap()
-        lp.topMargin = OverlayUi.dp(context, 6f)
-        root.addView(row, lp)
-    }
-
-    private fun row(context: Context, vararg views: View): LinearLayout {
-        val container = LinearLayout(context)
-        container.orientation = LinearLayout.HORIZONTAL
-        views.forEachIndexed { index, view ->
-            val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            if (index > 0) lp.marginStart = OverlayUi.dp(context, 4f)
-            container.addView(view, lp)
-        }
-        return container
-    }
-
-    private fun button(context: Context, text: String, onClick: () -> Unit): Button {
-        val button = Button(context)
-        button.text = text
-        button.textSize = 12f
-        button.isAllCaps = false
-        button.minWidth = 0
-        button.minimumWidth = 0
-        button.setPadding(0, button.paddingTop, 0, button.paddingBottom)
-        button.setOnClickListener { onClick() }
-        return button
     }
 
     /** 标记层内部状态容器，挂在标记层 View 的 tag 上。 */

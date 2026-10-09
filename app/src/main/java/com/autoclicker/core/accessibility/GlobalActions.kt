@@ -15,9 +15,6 @@ object GlobalActions {
     /** Home 键。 */
     fun home(): Boolean = performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
 
-    /** 最近任务键。 */
-    fun recents(): Boolean = performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
-
     /** 向当前获得输入焦点的节点写入文本。 */
     suspend fun inputText(text: String): Boolean {
         val service = AutoAccessService.instance ?: return false

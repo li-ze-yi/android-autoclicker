@@ -19,7 +19,7 @@ object TemplateMatcher {
      *
      * @param region    null 或宽/高 <= 0 表示全屏；否则与屏幕取交集。
      * @param threshold 相似度阈值（0f~1f）。
-     * @return 命中返回整屏坐标中心点与相似度，未命中返回 null。
+     * @return 命中返回整屏坐标中心点，未命中返回 null。
      */
     fun findMatch(screen: Bitmap, template: Bitmap, region: Rect?, threshold: Float): MatchResult? {
         if (screen.width <= 0 || screen.height <= 0) return null
@@ -130,7 +130,7 @@ object TemplateMatcher {
 
             val centerX = searchRect.left + bestX * factor + template.width / 2
             val centerY = searchRect.top + bestY * factor + template.height / 2
-            return MatchResult(centerX, centerY, similarity)
+            return MatchResult(centerX, centerY)
         } catch (e: Exception) {
             return null
         } finally {

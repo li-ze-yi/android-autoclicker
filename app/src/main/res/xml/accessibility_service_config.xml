@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- android:canRequestTouchExplorationMode="true" 声明本服务具备请求触摸事件源的能力，
-     Android 14+ 上 setMotionEventSources(SOURCE_TOUCHSCREEN) 才能生效。
-     刻意不添加 flagRequestTouchExplorationMode 到 accessibilityFlags：那会真正开启触摸探索模式、
-     改变设备交互方式，风险高；此处仅声明能力，不改变交互。 -->
+<!-- 说明：本配置当前未声明 android:canRequestTouchExplorationMode 能力，也不在 accessibilityFlags
+     中启用触摸探索模式（flagRequestTouchExplorationMode）。因此 Android 14+ 上
+     setMotionEventSources(SOURCE_TOUCHSCREEN) 不会生效，本服务不接管触摸探索交互。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFeedbackType="feedbackGeneric"

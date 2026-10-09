@@ -34,8 +34,6 @@ class TriggerScheduler private constructor(context: Context) {
 
     companion object {
         const val EXTRA_SCRIPT_ID = "extra_script_id"
-        const val EXTRA_TRIGGER_HOUR = "extra_hour"
-        const val EXTRA_TRIGGER_MINUTE = "extra_minute"
 
         private const val PREFS_NAME = "autoclicker_triggers"
         private const val KEY_RECORDS = "records"

@@ -349,15 +349,23 @@ private fun String.withBounds(left: Int?, top: Int?, right: Int?, bottom: Int?):
         this
     }
 
+/** 把控件选择器的各字段拼成 "k=v" 片段列表；为空的字段跳过。 */
+private fun selectorParts(
+    text: String?,
+    viewId: String?,
+    contentDesc: String?,
+    className: String?
+): List<String> = buildList {
+    text?.let { add("text=$it") }
+    viewId?.let { add("viewId=$it") }
+    contentDesc?.let { add("contentDesc=$it") }
+    className?.let { add("className=$it") }
+}
+
 /** 条件判断的可读摘要（UI 展示用）。 */
 fun Condition.describe(): String = when (this) {
     is Condition.ElementExists -> {
-        val parts = buildList {
-            text?.let { add("text=$it") }
-            viewId?.let { add("viewId=$it") }
-            contentDesc?.let { add("contentDesc=$it") }
-            className?.let { add("className=$it") }
-        }
+        val parts = selectorParts(text, viewId, contentDesc, className)
         "元素(" + (if (parts.isEmpty()) "无条件" else parts.joinToString(", ")) + ")"
     }
     is Condition.ColorFound -> "颜色(" + formatColor(color) + ")"
@@ -411,21 +419,11 @@ fun Step.withDelay(delayMs: Long): Step = when (this) {
 }
 
 private fun Step.WaitForElement.selectorSummary(): String {
-    val parts = buildList {
-        text?.let { add("text=$it") }
-        viewId?.let { add("viewId=$it") }
-        contentDesc?.let { add("contentDesc=$it") }
-        className?.let { add("className=$it") }
-    }
+    val parts = selectorParts(text, viewId, contentDesc, className)
     return if (parts.isEmpty()) "无条件" else parts.joinToString(", ")
 }
 
 private fun Step.TapElement.selectorSummary(): String {
-    val parts = buildList {
-        text?.let { add("text=$it") }
-        viewId?.let { add("viewId=$it") }
-        contentDesc?.let { add("contentDesc=$it") }
-        className?.let { add("className=$it") }
-    }
+    val parts = selectorParts(text, viewId, contentDesc, className)
     return if (parts.isEmpty()) "无条件" else parts.joinToString(", ")
 }

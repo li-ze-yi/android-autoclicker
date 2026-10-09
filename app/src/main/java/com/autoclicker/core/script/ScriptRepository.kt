@@ -44,7 +44,7 @@ class ScriptRepository private constructor(context: Context) {
         try {
             File(scriptsDir, "${updated.id}.json").writeText(ScriptSerializer.encode(updated))
         } catch (e: Exception) {
-            // 写入失败时仍返回对象，调用方可通过 exists() 校验
+            // 写入失败时仍返回对象
         }
         return updated
     }
@@ -64,12 +64,4 @@ class ScriptRepository private constructor(context: Context) {
     }
 
     fun createNew(name: String = "新脚本"): Script = save(Script.create(name))
-
-    fun exists(id: String): Boolean {
-        return try {
-            File(scriptsDir, "$id.json").exists()
-        } catch (e: Exception) {
-            false
-        }
-    }
 }

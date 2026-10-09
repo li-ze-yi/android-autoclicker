@@ -1,7 +1,6 @@
 package com.autoclicker.core.overlay
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
@@ -36,6 +35,7 @@ import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
 import com.autoclicker.core.script.Step
 import com.autoclicker.core.script.withNewId
+import com.autoclicker.core.util.NotificationChannels
 import com.autoclicker.core.util.PermissionChecker
 import com.autoclicker.core.vision.CapturePermissionActivity
 import com.autoclicker.core.vision.RegionPickerBridge
@@ -49,7 +49,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -131,7 +130,6 @@ class OverlayService : Service() {
     private var captureLayerView: View? = null
     private var captureLayerParams: WindowManager.LayoutParams? = null
     private var subscribed = false
-    private var editorShowing = false
 
     private var markerView: View? = null
     private var markerParams: WindowManager.LayoutParams? = null
@@ -350,7 +348,6 @@ class OverlayService : Service() {
             )
             val stepIndex = when (state) {
                 is RunnerState.Running -> state.stepIndex
-                is RunnerState.Paused -> state.stepIndex
                 else -> -1
             }
             OverlayUi.highlightStep(panel, stepIndex)
@@ -371,7 +368,6 @@ class OverlayService : Service() {
             val ballRunning = state.isActive || clickerRunning
             val ballText = when {
                 state is RunnerState.Running -> (state.stepIndex + 1).toString()
-                state is RunnerState.Paused -> (state.stepIndex + 1).toString()
                 clickerState is ClickerState.Running -> (clickerState.pointIndex + 1).toString()
                 else -> ""
             }
@@ -795,7 +791,6 @@ class OverlayService : Service() {
             ClickerEngine.config.collect { cfg ->
                 markerView?.let { ClickerOverlay.setPoints(it, cfg.points) }
                 controlBarView?.let { ClickerOverlay.setConfig(it, cfg) }
-                refreshClickerStatus()
             }
         }
         scope.launch {
@@ -939,9 +934,7 @@ class OverlayService : Service() {
     private fun editStep(script: Script?, index: Int) {
         val target = script ?: return
         val step = target.steps.getOrNull(index) ?: return
-        editorShowing = true
         OverlayStepEditor.show(this, windowManager, step) { updated ->
-            editorShowing = false
             applyStepUpdate(target, index, updated)
         }
     }
@@ -1035,7 +1028,7 @@ class OverlayService : Service() {
             startActivity(
                 Intent(this, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    .putExtra("open_route", route)
+                    .putExtra(MainActivity.EXTRA_OPEN_ROUTE, route)
             )
         } catch (e: Exception) {
             // 忽略
@@ -1064,7 +1057,6 @@ class OverlayService : Service() {
 
     private fun hideAll() {
         OverlayStepEditor.hide(windowManager)
-        editorShowing = false
         removeView(ballView)
         ballView = null
         ballParams = null
@@ -1093,10 +1085,9 @@ class OverlayService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "悬浮窗控制", NotificationManager.IMPORTANCE_LOW)
-        )
+        // 复用统一的通知渠道创建入口；NotificationCompat.Builder 只需 channelId，
+        // 故 ensure 返回 null（渠道创建失败）时仍能构建出可用通知，无需额外兜底。
+        NotificationChannels.ensure(this, CHANNEL_ID, "悬浮窗控制", NotificationManager.IMPORTANCE_LOW)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("自动点击助手")

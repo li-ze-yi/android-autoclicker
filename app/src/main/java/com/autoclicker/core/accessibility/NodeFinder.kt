@@ -70,7 +70,7 @@ object NodeFinder {
 
     /** 安全回收无障碍节点，重复回收或已回收时忽略异常。 */
     @Suppress("DEPRECATION")
-    private fun recycleQuietly(node: AccessibilityNodeInfo) {
+    fun recycleQuietly(node: AccessibilityNodeInfo) {
         try {
             node.recycle()
         } catch (e: Exception) {
