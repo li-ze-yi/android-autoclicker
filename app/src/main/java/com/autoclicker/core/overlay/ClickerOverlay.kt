@@ -218,7 +218,7 @@ internal object ClickerOverlay {
             is ClickerState.Idle -> "就绪 ｜ $pointCount 个点 ｜ 循环：$loopText"
             is ClickerState.Running -> {
                 val total = if (state.totalLoops == -1) "∞" else state.totalLoops.toString()
-                "运行中 ｜ 第${state.loopIndex + 1}/$total轮 ｜ " +
+                "运行中 ｜ 第${state.loopIndex + 1}/${total}轮 ｜ " +
                     "第${state.pointIndex + 1}/${state.totalPoints}点 ｜ " +
                     "$pointCount 个点 ｜ 循环：$loopText"
             }
