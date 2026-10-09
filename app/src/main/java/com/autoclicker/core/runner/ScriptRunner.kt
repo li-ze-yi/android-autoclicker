@@ -3,12 +3,15 @@ package com.autoclicker.core.runner
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.PointF
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import com.autoclicker.core.accessibility.GestureExecutor
 import com.autoclicker.core.accessibility.GlobalActions
 import com.autoclicker.core.accessibility.NodeFinder
 import com.autoclicker.core.accessibility.NodeSelector
+import com.autoclicker.core.script.CompareOp
+import com.autoclicker.core.script.Condition
 import com.autoclicker.core.script.OnTimeout
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.Step
@@ -48,6 +51,9 @@ object ScriptRunner {
 
     /** 循环间隔等待时，暂停检查的切片长度。 */
     private const val PAUSE_SLICE_MS = 100L
+
+    /** 单轮最多执行步数（含跳转重复执行），兜底防止脚本死循环把设备卡死。 */
+    private const val MAX_STEPS_PER_LOOP = 100_000
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -119,8 +125,11 @@ object ScriptRunner {
                 return
             }
 
-            val total = script.steps.size
+            val steps = script.steps
+            val total = steps.size
             val totalLoops = if (script.loopInfinite) -1 else maxOf(1, script.loopCount)
+            val labels = buildLabelMap(steps)
+            val vars = HashMap<String, String>()
 
             var loopIndex = 0
             while (true) {
@@ -129,30 +138,34 @@ object ScriptRunner {
                     break
                 }
 
-                script.steps.forEachIndexed { index, step ->
+                // 单轮内用 pc 游标执行，支持 Label/Jump/IfElse 改变流向。
+                var pc = 0
+                val jumpCounts = HashMap<Int, Int>()
+                var stepsExecuted = 0
+
+                while (pc < steps.size) {
                     coroutineContext.ensureActive()
+                    if (stepsExecuted++ >= MAX_STEPS_PER_LOOP) {
+                        _state.value = RunnerState.Finished(
+                            script.name,
+                            false,
+                            "单轮执行步数超限（可能存在死循环），已中止"
+                        )
+                        return
+                    }
+
+                    val step = steps[pc]
+                    val stepText = step.describe()
 
                     if (paused.value) {
                         _state.value = RunnerState.Paused(
-                            script.id,
-                            script.name,
-                            index,
-                            total,
-                            step.describe(),
-                            loopIndex,
-                            totalLoops
+                            script.id, script.name, pc, total, stepText, loopIndex, totalLoops
                         )
                         paused.first { !it }
                     }
 
                     _state.value = RunnerState.Running(
-                        script.id,
-                        script.name,
-                        index,
-                        total,
-                        step.describe(),
-                        loopIndex,
-                        totalLoops
+                        script.id, script.name, pc, total, stepText, loopIndex, totalLoops
                     )
 
                     val stepDelay = if (step.delayBeforeMs > 0L) {
@@ -164,15 +177,57 @@ object ScriptRunner {
                         awaitInterruptible(stepDelay)
                     }
 
-                    val result = executeStep(script, step)
-                    if (!result.success && script.stopOnError) {
-                        _state.value = RunnerState.Finished(
-                            script.name,
-                            false,
-                            "第 ${index + 1} 步失败：${result.message ?: "未知错误"}"
-                        )
-                        return
+                    var nextPc = pc + 1
+                    when (step) {
+                        is Step.Label -> {
+                            // 标签本身无副作用。
+                        }
+
+                        is Step.SetVar -> vars[step.name] = interpolate(step.value, vars)
+
+                        is Step.Jump -> {
+                            val used = jumpCounts.getOrElse(pc) { 0 }
+                            if (step.maxTimes >= 0 && used >= step.maxTimes) {
+                                // 达到跳转次数上限，继续向下执行。
+                            } else {
+                                val target = labels[step.label]
+                                if (target == null) {
+                                    if (script.stopOnError) {
+                                        finishFailed(script, pc, StepResult(false, "跳转目标标签不存在：${step.label}"))
+                                        return
+                                    }
+                                } else {
+                                    jumpCounts[pc] = used + 1
+                                    nextPc = target
+                                }
+                            }
+                        }
+
+                        is Step.IfElse -> {
+                            val matched = evaluateCondition(step.condition, vars)
+                            val label = if (matched) step.thenLabel else step.elseLabel
+                            if (label != null) {
+                                val target = labels[label]
+                                if (target == null) {
+                                    if (script.stopOnError) {
+                                        finishFailed(script, pc, StepResult(false, "条件跳转目标标签不存在：$label"))
+                                        return
+                                    }
+                                } else {
+                                    nextPc = target
+                                }
+                            }
+                        }
+
+                        else -> {
+                            val result = executeStep(script, step, vars)
+                            if (!result.success && script.stopOnError) {
+                                finishFailed(script, pc, result)
+                                return
+                            }
+                        }
                     }
+                    pc = nextPc
                 }
 
                 loopIndex++
@@ -198,6 +253,82 @@ object ScriptRunner {
         }
     }
 
+    private fun finishFailed(script: Script, pc: Int, result: StepResult) {
+        _state.value = RunnerState.Finished(
+            script.name,
+            false,
+            "第 ${pc + 1} 步失败：${result.message ?: "未知错误"}"
+        )
+    }
+
+    /** 建立 标签名 -> 步骤下标 的映射；同名标签以最后一个为准。 */
+    private fun buildLabelMap(steps: List<Step>): Map<String, Int> {
+        val map = HashMap<String, Int>()
+        steps.forEachIndexed { index, step ->
+            if (step is Step.Label) map[step.name] = index
+        }
+        return map
+    }
+
+    /** 把文本中的 `${变量名}` 替换为变量值（P3）。 */
+    private fun interpolate(text: String, vars: Map<String, String>): String {
+        if (text.indexOf('$') < 0 || vars.isEmpty()) return text
+        var result = text
+        for ((key, value) in vars) {
+            result = result.replace("\${$key}", value)
+        }
+        return result
+    }
+
+    /** 求值条件（P3）。 */
+    private suspend fun evaluateCondition(condition: Condition, vars: Map<String, String>): Boolean =
+        when (condition) {
+            is Condition.ElementExists -> {
+                val selector = NodeSelector(
+                    text = condition.text,
+                    viewId = condition.viewId,
+                    contentDesc = condition.contentDesc,
+                    className = condition.className,
+                    index = condition.index
+                )
+                val node = NodeFinder.awaitNode(selector, condition.timeoutMs)
+                val found = node != null
+                recycleNode(node)
+                found
+            }
+
+            is Condition.ColorFound -> colorFound(condition)
+
+            is Condition.VarCompare -> compareVar(vars[condition.name], condition.op, condition.value)
+        }
+
+    private suspend fun colorFound(condition: Condition.ColorFound): Boolean {
+        if (!ScreenCaptureService.isReady) return false
+        val rect = buildRegion(
+            condition.regionLeft, condition.regionTop,
+            condition.regionWidth, condition.regionHeight
+        )
+        val screen = withContext(Dispatchers.IO) { ScreenCaptureService.capture(0) } ?: return false
+        return try {
+            withContext(Dispatchers.IO) {
+                ColorMatcher.findColor(screen, condition.color, condition.tolerance, rect)
+            } != null
+        } finally {
+            if (!screen.isRecycled) screen.recycle()
+        }
+    }
+
+    private fun compareVar(actual: String?, op: CompareOp, expected: String): Boolean {
+        val a = actual ?: ""
+        return when (op) {
+            CompareOp.EQ -> a == expected
+            CompareOp.NE -> a != expected
+            CompareOp.CONTAINS -> a.contains(expected)
+            CompareOp.GT -> (a.toDoubleOrNull() ?: 0.0) > (expected.toDoubleOrNull() ?: 0.0)
+            CompareOp.LT -> (a.toDoubleOrNull() ?: 0.0) < (expected.toDoubleOrNull() ?: 0.0)
+        }
+    }
+
     /** 可取消、且会跟随暂停状态挂起的等待（用于循环间隔）。 */
     private suspend fun awaitInterruptible(totalMs: Long) {
         var remaining = totalMs
@@ -212,10 +343,15 @@ object ScriptRunner {
         }
     }
 
-    private suspend fun executeStep(script: Script, step: Step): StepResult = when (step) {
+    private suspend fun executeStep(script: Script, step: Step, vars: Map<String, String>): StepResult = when (step) {
         is Step.Tap -> {
-            val x = jitterCoordinate(step.x, script.jitterRadiusPx)
-            val y = jitterCoordinate(step.y, script.jitterRadiusPx)
+            val point = resolvePoint(
+                step.x, step.y,
+                step.boundsLeft, step.boundsTop, step.boundsRight, step.boundsBottom,
+                step.relX, step.relY
+            )
+            val x = jitterCoordinate(point.x, script.jitterRadiusPx)
+            val y = jitterCoordinate(point.y, script.jitterRadiusPx)
             if (GestureExecutor.click(x, y)) {
                 StepResult(true, "点击成功")
             } else {
@@ -224,8 +360,13 @@ object ScriptRunner {
         }
 
         is Step.LongPress -> {
-            val x = jitterCoordinate(step.x, script.jitterRadiusPx)
-            val y = jitterCoordinate(step.y, script.jitterRadiusPx)
+            val point = resolvePoint(
+                step.x, step.y,
+                step.boundsLeft, step.boundsTop, step.boundsRight, step.boundsBottom,
+                step.relX, step.relY
+            )
+            val x = jitterCoordinate(point.x, script.jitterRadiusPx)
+            val y = jitterCoordinate(point.y, script.jitterRadiusPx)
             if (GestureExecutor.longPress(x, y, step.durationMs)) {
                 StepResult(true, "长按成功")
             } else {
@@ -233,18 +374,35 @@ object ScriptRunner {
             }
         }
 
-        // 滑动不做坐标扰动。
+        // 滑动不做坐标扰动；有轨迹时按完整轨迹派发。
         is Step.Swipe -> {
-            if (GestureExecutor.swipe(step.x1, step.y1, step.x2, step.y2, step.durationMs)) {
+            val path = step.path
+            val ok = if (path != null && path.size > 1) {
+                GestureExecutor.dispatchPath(listOf(path))
+            } else {
+                GestureExecutor.swipe(step.x1, step.y1, step.x2, step.y2, step.durationMs)
+            }
+            if (ok) {
                 StepResult(true, "滑动成功")
             } else {
                 StepResult(false, "滑动失败（无障碍服务未连接或手势被拒绝）")
             }
         }
 
-        // 输入不做坐标扰动。
+        // 多指手势（P0）：一次派发全部轨迹。
+        is Step.MultiGesture -> {
+            if (step.strokes.isEmpty()) {
+                StepResult(false, "多指手势为空")
+            } else if (GestureExecutor.dispatchPath(step.strokes)) {
+                StepResult(true, "多指手势完成")
+            } else {
+                StepResult(false, "多指手势失败（无障碍服务未连接或手势被拒绝）")
+            }
+        }
+
+        // 输入不做坐标扰动；支持 ${变量} 替换。
         is Step.Input -> {
-            if (GlobalActions.inputText(step.text)) {
+            if (GlobalActions.inputText(interpolate(step.text, vars))) {
                 StepResult(true, "输入成功")
             } else {
                 StepResult(false, "输入失败（未找到输入焦点）")
@@ -256,10 +414,10 @@ object ScriptRunner {
             StepResult(true, "等待完成")
         }
 
-        // 启动应用不做坐标扰动。
-        is Step.LaunchApp -> launchApp(step.packageName)
+        // 启动应用不做坐标扰动；支持 ${变量} 替换。
+        is Step.LaunchApp -> launchApp(interpolate(step.packageName, vars))
 
-        is Step.WaitForElement -> waitForElement(step)
+        is Step.WaitForElement -> waitForElement(step, vars)
 
         // 返回键不做坐标扰动。
         is Step.Back -> {
@@ -281,11 +439,47 @@ object ScriptRunner {
 
         is Step.Burst -> burst(script, step)
 
-        is Step.TapElement -> tapElement(script, step)
+        is Step.TapElement -> tapElement(script, step, vars)
 
         is Step.ImageTap -> imageTap(script, step)
 
         is Step.ColorTap -> colorTap(script, step)
+
+        // 以下类型由 execute 处理（控制流/变量），此处仅为 when 穷尽兜底。
+        is Step.SetVar, is Step.Label, is Step.Jump, is Step.IfElse -> StepResult(true, null)
+    }
+
+    /**
+     * P1：优先用录制时保存的控件包围盒重新定位控件，并按真实触点在该控件内的相对比例算落点；
+     * 定位失败时退回绝对坐标。
+     */
+    private fun resolvePoint(
+        x: Float,
+        y: Float,
+        boundsLeft: Int?,
+        boundsTop: Int?,
+        boundsRight: Int?,
+        boundsBottom: Int?,
+        relX: Float?,
+        relY: Float?
+    ): PointF {
+        if (boundsLeft != null && boundsTop != null && boundsRight != null && boundsBottom != null) {
+            val node = NodeFinder.findByBounds(boundsLeft, boundsTop, boundsRight, boundsBottom)
+            if (node != null) {
+                try {
+                    val rect = Rect()
+                    node.getBoundsInScreen(rect)
+                    if (rect.width() > 0 && rect.height() > 0) {
+                        val rx = (relX ?: 0.5f).coerceIn(0f, 1f)
+                        val ry = (relY ?: 0.5f).coerceIn(0f, 1f)
+                        return PointF(rect.left + rect.width() * rx, rect.top + rect.height() * ry)
+                    }
+                } finally {
+                    recycleNode(node)
+                }
+            }
+        }
+        return PointF(x, y)
     }
 
     private suspend fun launchApp(packageName: String): StepResult {
@@ -305,9 +499,9 @@ object ScriptRunner {
         }
     }
 
-    private suspend fun waitForElement(step: Step.WaitForElement): StepResult {
+    private suspend fun waitForElement(step: Step.WaitForElement, vars: Map<String, String>): StepResult {
         val selector = NodeSelector(
-            text = step.text,
+            text = step.text?.let { interpolate(it, vars) },
             viewId = step.viewId,
             contentDesc = step.contentDesc,
             className = step.className
@@ -354,9 +548,9 @@ object ScriptRunner {
         return StepResult(true, "连点完成 ×${step.count}")
     }
 
-    private suspend fun tapElement(script: Script, step: Step.TapElement): StepResult {
+    private suspend fun tapElement(script: Script, step: Step.TapElement, vars: Map<String, String>): StepResult {
         val selector = NodeSelector(
-            text = step.text,
+            text = step.text?.let { interpolate(it, vars) },
             viewId = step.viewId,
             contentDesc = step.contentDesc,
             className = step.className,

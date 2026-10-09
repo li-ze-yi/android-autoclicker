@@ -69,6 +69,8 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autoclicker.core.overlay.OverlayService
 import com.autoclicker.core.overlay.PickPointBridge
+import com.autoclicker.core.script.CompareOp
+import com.autoclicker.core.script.Condition
 import com.autoclicker.core.script.OnTimeout
 import com.autoclicker.core.script.Step
 import com.autoclicker.core.script.describe
@@ -103,6 +105,7 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
     val script by viewModel.script.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var showBatchDelayDialog by remember { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<Step?>(null) }
 
     val rowHeightPx = with(LocalDensity.current) { ROW_HEIGHT.toPx() }
@@ -135,6 +138,9 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    TextButton(onClick = { showBatchDelayDialog = true }) {
+                        Text("批量")
+                    }
                     TextButton(onClick = {
                         viewModel.save()
                         Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
@@ -423,7 +429,11 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
                     thresholdPercent = VisionSettings.get(context).defaultThresholdPercent
                 )
             },
-            "识色点击" to { Step.ColorTap(color = -65536) }
+            "识色点击" to { Step.ColorTap(color = -65536) },
+            "标签" to { Step.Label(name = "label1") },
+            "跳转" to { Step.Jump(label = "label1") },
+            "条件判断" to { Step.IfElse() },
+            "设置变量" to { Step.SetVar(name = "v1", value = "0") }
         )
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
@@ -445,6 +455,43 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = { showAddDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showBatchDelayDialog) {
+        var batchDelayText by remember { mutableStateOf("0") }
+        AlertDialog(
+            onDismissRequest = { showBatchDelayDialog = false },
+            title = { Text("统一设置步骤延时") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = batchDelayText,
+                        onValueChange = { batchDelayText = it },
+                        label = { Text("每步执行前延时(ms)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = NumberKeyboard
+                    )
+                    Text("将覆盖所有步骤的延时值", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val v = batchDelayText.trim().toLongOrNull()
+                    if (v == null) {
+                        Toast.makeText(context, "请输入整数毫秒", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.setAllStepDelay(v)
+                        showBatchDelayDialog = false
+                    }
+                }) {
+                    Text("应用")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDelayDialog = false }) { Text("取消") }
             }
         )
     }
@@ -558,6 +605,8 @@ private fun StepEditDialog(
     var x2Str by remember(step.id) { mutableStateOf(initialX2(step)) }
     var y2Str by remember(step.id) { mutableStateOf(initialY2(step)) }
     var durationStr by remember(step.id) { mutableStateOf(initialDuration(step)) }
+    // P2：是否把带轨迹的滑动简化为直线。
+    var clearSwipePath by remember(step.id) { mutableStateOf(false) }
     var textStr by remember(step.id) { mutableStateOf(initialText(step)) }
     var pkgStr by remember(step.id) {
         mutableStateOf((step as? Step.LaunchApp)?.packageName ?: "")
@@ -637,6 +686,37 @@ private fun StepEditDialog(
         )
     }
     var error by remember(step.id) { mutableStateOf<String?>(null) }
+
+    // P3：控制流与变量字段
+    var varName by remember(step.id) { mutableStateOf((step as? Step.SetVar)?.name ?: "") }
+    var varValue by remember(step.id) { mutableStateOf((step as? Step.SetVar)?.value ?: "") }
+    var labelName by remember(step.id) { mutableStateOf((step as? Step.Label)?.name ?: "") }
+    var jumpLabel by remember(step.id) { mutableStateOf((step as? Step.Jump)?.label ?: "") }
+    var jumpMaxTimes by remember(step.id) {
+        mutableStateOf(((step as? Step.Jump)?.maxTimes ?: -1).toString())
+    }
+    var thenLabelStr by remember(step.id) { mutableStateOf((step as? Step.IfElse)?.thenLabel ?: "") }
+    var elseLabelStr by remember(step.id) { mutableStateOf((step as? Step.IfElse)?.elseLabel ?: "") }
+    var condKind by remember(step.id) { mutableIntStateOf(initialCondKind(step)) }
+    var condTextStr by remember(step.id) { mutableStateOf(condElement(step)?.text ?: "") }
+    var condViewIdStr by remember(step.id) { mutableStateOf(condElement(step)?.viewId ?: "") }
+    var condDescStr by remember(step.id) { mutableStateOf(condElement(step)?.contentDesc ?: "") }
+    var condClassStr by remember(step.id) { mutableStateOf(condElement(step)?.className ?: "") }
+    var condIndexStr by remember(step.id) { mutableStateOf((condElement(step)?.index ?: 0).toString()) }
+    var condTimeoutStr by remember(step.id) {
+        mutableStateOf((condElement(step)?.timeoutMs ?: 1000L).toString())
+    }
+    var condColorStr by remember(step.id) {
+        mutableStateOf(
+            condColor(step)?.let { "#%06X".format(Locale.US, it.color and 0xFFFFFF) } ?: "#FF0000"
+        )
+    }
+    var condToleranceStr by remember(step.id) {
+        mutableStateOf((condColor(step)?.tolerance ?: 20).toString())
+    }
+    var condVarNameStr by remember(step.id) { mutableStateOf(condVar(step)?.name ?: "") }
+    var condVarOp by remember(step.id) { mutableStateOf(condVar(step)?.op ?: CompareOp.EQ) }
+    var condVarValueStr by remember(step.id) { mutableStateOf(condVar(step)?.value ?: "") }
 
     LaunchedEffect(step.id) {
         PickPointBridge.clear()
@@ -769,6 +849,15 @@ private fun StepEditDialog(
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
+                        if ((step as? Step.Swipe)?.path != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = clearSwipePath,
+                                    onCheckedChange = { clearSwipePath = it }
+                                )
+                                Text("清除轨迹（简化为直线滑动）")
+                            }
+                        }
                     }
 
                     is Step.Input -> {
@@ -1233,6 +1322,168 @@ private fun StepEditDialog(
                         )
                         OnTimeoutSelector(onTimeout) { onTimeout = it }
                     }
+
+                    is Step.MultiGesture -> {
+                        val strokes = (step as? Step.MultiGesture)?.strokes ?: emptyList()
+                        Text(
+                            "多指手势：${strokes.size} 指 / ${strokes.sumOf { it.size }} 点" +
+                                "（由精确录制生成，轨迹不可在此编辑）",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    is Step.SetVar -> {
+                        OutlinedTextField(
+                            value = varName,
+                            onValueChange = { varName = it },
+                            label = { Text("变量名") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = varValue,
+                            onValueChange = { varValue = it },
+                            label = { Text("值（支持 ${'$'}{其它变量}）") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    is Step.Label -> {
+                        OutlinedTextField(
+                            value = labelName,
+                            onValueChange = { labelName = it },
+                            label = { Text("标签名") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Text("配合「跳转」/「条件判断」使用", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    is Step.Jump -> {
+                        OutlinedTextField(
+                            value = jumpLabel,
+                            onValueChange = { jumpLabel = it },
+                            label = { Text("目标标签名") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = jumpMaxTimes,
+                            onValueChange = { jumpMaxTimes = it },
+                            label = { Text("最大跳转次数（-1=不限）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                    }
+
+                    is Step.IfElse -> {
+                        Text("条件类型", style = MaterialTheme.typography.bodyMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = condKind == 0,
+                                onClick = { condKind = 0 },
+                                label = { Text("元素存在") }
+                            )
+                            FilterChip(
+                                selected = condKind == 1,
+                                onClick = { condKind = 1 },
+                                label = { Text("识色") }
+                            )
+                            FilterChip(
+                                selected = condKind == 2,
+                                onClick = { condKind = 2 },
+                                label = { Text("变量比较") }
+                            )
+                        }
+                        when (condKind) {
+                            0 -> {
+                                OutlinedTextField(
+                                    value = condTextStr, onValueChange = { condTextStr = it },
+                                    label = { Text("文本（可空）") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = condViewIdStr, onValueChange = { condViewIdStr = it },
+                                    label = { Text("资源ID（可空）") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = condDescStr, onValueChange = { condDescStr = it },
+                                    label = { Text("描述（可空）") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = condClassStr, onValueChange = { condClassStr = it },
+                                    label = { Text("类名（可空）") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = condIndexStr, onValueChange = { condIndexStr = it },
+                                    label = { Text("序号") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                                    keyboardOptions = NumberKeyboard
+                                )
+                                OutlinedTextField(
+                                    value = condTimeoutStr, onValueChange = { condTimeoutStr = it },
+                                    label = { Text("等待超时(ms)") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                                    keyboardOptions = NumberKeyboard
+                                )
+                            }
+
+                            1 -> {
+                                OutlinedTextField(
+                                    value = condColorStr, onValueChange = { condColorStr = it },
+                                    label = { Text("颜色(#RRGGBB)") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = condToleranceStr, onValueChange = { condToleranceStr = it },
+                                    label = { Text("容差") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                                    keyboardOptions = NumberKeyboard
+                                )
+                            }
+
+                            else -> {
+                                OutlinedTextField(
+                                    value = condVarNameStr, onValueChange = { condVarNameStr = it },
+                                    label = { Text("变量名") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CompareOp.values().forEach { op ->
+                                        FilterChip(
+                                            selected = condVarOp == op,
+                                            onClick = { condVarOp = op },
+                                            label = { Text(op.name) }
+                                        )
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = condVarValueStr,
+                                    onValueChange = { condVarValueStr = it },
+                                    label = { Text("比较值") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = thenLabelStr, onValueChange = { thenLabelStr = it },
+                            label = { Text("成立时跳转标签（可空）") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = elseLabelStr, onValueChange = { elseLabelStr = it },
+                            label = { Text("不成立时跳转标签（可空）") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        Text("留空表示不跳转，继续执行下一步", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
 
                 OutlinedTextField(
@@ -1325,7 +1576,8 @@ private fun StepEditDialog(
                                     y1 = y1,
                                     x2 = x2,
                                     y2 = y2,
-                                    durationMs = d
+                                    durationMs = d,
+                                    path = if (clearSwipePath) null else (step as? Step.Swipe)?.path
                                 )
                             )
                         }
@@ -1518,6 +1770,122 @@ private fun StepEditDialog(
                             )
                         }
                     }
+
+                    is Step.MultiGesture -> onConfirm(
+                        Step.MultiGesture(
+                            id = step.id,
+                            note = note,
+                            delayBeforeMs = parsedDelay,
+                            strokes = (step as? Step.MultiGesture)?.strokes ?: emptyList()
+                        )
+                    )
+
+                    is Step.SetVar -> {
+                        if (varName.isBlank()) {
+                            error = "请输入变量名"
+                        } else {
+                            onConfirm(
+                                Step.SetVar(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    name = varName.trim(),
+                                    value = varValue
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.Label -> {
+                        if (labelName.isBlank()) {
+                            error = "请输入标签名"
+                        } else {
+                            onConfirm(
+                                Step.Label(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    name = labelName.trim()
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.Jump -> {
+                        val maxTimes = jumpMaxTimes.trim().toIntOrNull()
+                        if (jumpLabel.isBlank()) {
+                            error = "请输入目标标签名"
+                        } else if (maxTimes == null) {
+                            error = "最大跳转次数需为整数"
+                        } else {
+                            onConfirm(
+                                Step.Jump(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    label = jumpLabel.trim(),
+                                    maxTimes = maxTimes
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.IfElse -> {
+                        val condition: Condition? = when (condKind) {
+                            0 -> {
+                                val idx = condIndexStr.trim().toIntOrNull()
+                                val t = condTimeoutStr.trim().toLongOrNull()
+                                if (idx == null || t == null) {
+                                    null
+                                } else {
+                                    Condition.ElementExists(
+                                        text = condTextStr.ifBlank { null },
+                                        viewId = condViewIdStr.ifBlank { null },
+                                        contentDesc = condDescStr.ifBlank { null },
+                                        className = condClassStr.ifBlank { null },
+                                        index = idx,
+                                        timeoutMs = t
+                                    )
+                                }
+                            }
+
+                            1 -> {
+                                val color = parseColorOrNull(condColorStr)
+                                val tol = condToleranceStr.trim().toIntOrNull()
+                                if (color == null || tol == null) {
+                                    null
+                                } else {
+                                    Condition.ColorFound(color = color, tolerance = tol)
+                                }
+                            }
+
+                            else -> {
+                                if (condVarNameStr.isBlank()) {
+                                    null
+                                } else {
+                                    Condition.VarCompare(
+                                        name = condVarNameStr.trim(),
+                                        op = condVarOp,
+                                        value = condVarValueStr
+                                    )
+                                }
+                            }
+                        }
+                        if (condition == null) {
+                            error = "请检查条件参数（序号/超时/颜色/变量名）"
+                        } else {
+                            onConfirm(
+                                Step.IfElse(
+                                    id = step.id,
+                                    note = note,
+                                    delayBeforeMs = parsedDelay,
+                                    condition = condition,
+                                    thenLabel = thenLabelStr.trim().ifBlank { null },
+                                    elseLabel = elseLabelStr.trim().ifBlank { null }
+                                )
+                            )
+                        }
+                    }
                 }
             }) {
                 Text("确定")
@@ -1600,6 +1968,22 @@ private fun initialColorText(step: Step): String {
     val color = (step as? Step.ColorTap)?.color ?: return "#FF0000"
     return "#%06X".format(Locale.US, color and 0xFFFFFF)
 }
+
+/** 条件类型下标：0=元素存在 1=识色 2=变量比较。 */
+private fun initialCondKind(step: Step): Int = when ((step as? Step.IfElse)?.condition) {
+    is Condition.ColorFound -> 1
+    is Condition.VarCompare -> 2
+    else -> 0
+}
+
+private fun condElement(step: Step): Condition.ElementExists? =
+    (step as? Step.IfElse)?.condition as? Condition.ElementExists
+
+private fun condColor(step: Step): Condition.ColorFound? =
+    (step as? Step.IfElse)?.condition as? Condition.ColorFound
+
+private fun condVar(step: Step): Condition.VarCompare? =
+    (step as? Step.IfElse)?.condition as? Condition.VarCompare
 
 /**
  * 解析颜色文本，支持 `#RRGGBB` / `#AARRGGBB` / `0x...` / 十进制三种写法。

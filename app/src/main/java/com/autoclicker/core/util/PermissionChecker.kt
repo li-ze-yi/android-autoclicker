@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import com.autoclicker.core.accessibility.AutoAccessService
+import com.autoclicker.core.trigger.NotificationTriggerService
 
 /**
  * 公共权限检查与跳转工具。所有跳转方法均包裹 try/catch，失败不崩溃。
@@ -39,6 +40,33 @@ object PermissionChecker {
     /** 悬浮窗（SYSTEM_ALERT_WINDOW）权限是否已授予。 */
     fun isOverlayGranted(context: Context): Boolean {
         return Settings.canDrawOverlays(context)
+    }
+
+    /**
+     * 本应用是否已获得「通知使用权」（P3 通知触发用）。
+     * 系统把已授权的监听器以 `包名/类名` 冒号分隔保存在 `enabled_notification_listeners`。
+     */
+    fun isNotificationAccessGranted(context: Context): Boolean {
+        val enabled = Settings.Secure.getString(
+            context.contentResolver,
+            "enabled_notification_listeners"
+        ) ?: return false
+        val component = ComponentName(context, NotificationTriggerService::class.java)
+        val fullName = component.flattenToString()
+        val shortName = component.flattenToShortString()
+        return enabled.split(':').any { it == fullName || it == shortName }
+    }
+
+    /** 跳转到系统「通知使用权」设置页。 */
+    fun openNotificationAccessSettings(context: Context) {
+        try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // 忽略
+        }
     }
 
     /** 通知权限是否已授予（API 33+ 为运行时权限）。 */

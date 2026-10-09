@@ -17,6 +17,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.autoclicker.core.script.Step
+import com.autoclicker.core.script.describe
 import com.autoclicker.core.script.typeLabel
 
 /**
@@ -346,6 +347,70 @@ internal object OverlayStepEditor {
                         offsetX = ox,
                         offsetY = oy,
                         timeoutMs = t,
+                        note = s("note"),
+                        delayBeforeMs = parsedDelay()
+                    )
+                }
+                reader
+            }
+
+            is Step.MultiGesture -> {
+                hintLabel(
+                    "多指手势：${step.strokes.size} 指 / ${step.strokes.sumOf { it.size }} 点，" +
+                        "轨迹不可在此编辑"
+                )
+                val reader: () -> Step? = {
+                    step.copy(note = s("note"), delayBeforeMs = parsedDelay())
+                }
+                reader
+            }
+
+            is Step.SetVar -> {
+                addField("name", "变量名", step.name, false)
+                addField("value", "值", step.value, false)
+                val reader: () -> Step? = {
+                    step.copy(
+                        name = s("name"),
+                        value = s("value"),
+                        note = s("note"),
+                        delayBeforeMs = parsedDelay()
+                    )
+                }
+                reader
+            }
+
+            is Step.Label -> {
+                addField("name", "标签名", step.name, false)
+                val reader: () -> Step? = {
+                    step.copy(name = s("name"), note = s("note"), delayBeforeMs = parsedDelay())
+                }
+                reader
+            }
+
+            is Step.Jump -> {
+                addField("label", "目标标签", step.label, false)
+                addField("maxTimes", "最大次数(-1=不限)", step.maxTimes.toString(), true)
+                val reader: () -> Step? = {
+                    val m = i("maxTimes")
+                    if (m == null) null
+                    else step.copy(
+                        label = s("label"),
+                        maxTimes = m,
+                        note = s("note"),
+                        delayBeforeMs = parsedDelay()
+                    )
+                }
+                reader
+            }
+
+            is Step.IfElse -> {
+                hintLabel("条件：${step.condition.describe()}（改条件请到脚本编辑器页）")
+                addField("thenLabel", "成立跳转标签", step.thenLabel ?: "", false)
+                addField("elseLabel", "不成立跳转标签", step.elseLabel ?: "", false)
+                val reader: () -> Step? = {
+                    step.copy(
+                        thenLabel = opt("thenLabel"),
+                        elseLabel = opt("elseLabel"),
                         note = s("note"),
                         delayBeforeMs = parsedDelay()
                     )

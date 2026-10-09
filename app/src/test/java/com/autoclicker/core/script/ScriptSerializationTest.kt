@@ -9,8 +9,42 @@ class ScriptSerializationTest {
 
     private fun allStepTypes(): List<Step> = listOf(
         Step.Tap(id = "s1", note = "n1", delayBeforeMs = 350L, x = 120f, y = 800f),
+        Step.Tap(
+            id = "s1b",
+            note = "带包围盒",
+            x = 120f,
+            y = 800f,
+            boundsLeft = 100,
+            boundsTop = 780,
+            boundsRight = 140,
+            boundsBottom = 820,
+            relX = 0.5f,
+            relY = 0.5f
+        ),
         Step.LongPress(id = "s2", note = "n2", x = 10f, y = 20f, durationMs = 900L),
         Step.Swipe(id = "s3", note = "n3", delayBeforeMs = 1200L, x1 = 100f, y1 = 900f, x2 = 100f, y2 = 300f, durationMs = 300L),
+        Step.Swipe(
+            id = "s3b",
+            note = "带轨迹",
+            x1 = 100f,
+            y1 = 900f,
+            x2 = 200f,
+            y2 = 300f,
+            durationMs = 400L,
+            path = listOf(
+                GesturePoint(100f, 900f, 0L),
+                GesturePoint(150f, 600f, 200L),
+                GesturePoint(200f, 300f, 400L)
+            )
+        ),
+        Step.MultiGesture(
+            id = "s3c",
+            note = "多指",
+            strokes = listOf(
+                listOf(GesturePoint(10f, 10f, 0L), GesturePoint(20f, 20f, 100L)),
+                listOf(GesturePoint(100f, 100f, 0L), GesturePoint(80f, 80f, 100L))
+            )
+        ),
         Step.Input(id = "s4", note = "n4", text = "你好"),
         Step.Wait(id = "s5", note = "n5", durationMs = 1000L),
         Step.LaunchApp(id = "s6", note = "n6", packageName = "com.tencent.mm"),
@@ -74,6 +108,34 @@ class ScriptSerializationTest {
             offsetY = 0,
             timeoutMs = 5000L,
             onTimeout = OnTimeout.SKIP
+        ),
+        Step.SetVar(id = "s14", note = "n14", name = "v1", value = "3"),
+        Step.Label(id = "s15", note = "n15", name = "loop1"),
+        Step.Jump(id = "s16", note = "n16", label = "loop1", maxTimes = 2),
+        Step.IfElse(
+            id = "s17",
+            note = "n17",
+            condition = Condition.ElementExists(
+                text = "登录",
+                viewId = "com.app:id/login",
+                timeoutMs = 1500L
+            ),
+            thenLabel = "loop1",
+            elseLabel = null
+        ),
+        Step.IfElse(
+            id = "s18",
+            note = "n18",
+            condition = Condition.ColorFound(color = 0xFF00FF00.toInt(), tolerance = 12),
+            thenLabel = null,
+            elseLabel = "end"
+        ),
+        Step.IfElse(
+            id = "s19",
+            note = "n19",
+            condition = Condition.VarCompare(name = "v1", op = CompareOp.GT, value = "2"),
+            thenLabel = "loop1",
+            elseLabel = "end"
         )
     )
 
@@ -112,6 +174,14 @@ class ScriptSerializationTest {
         assertTrue(text.contains("\"type\": \"tap_element\""))
         assertTrue(text.contains("\"type\": \"image_tap\""))
         assertTrue(text.contains("\"type\": \"color_tap\""))
+        assertTrue(text.contains("\"type\": \"multi_gesture\""))
+        assertTrue(text.contains("\"type\": \"set_var\""))
+        assertTrue(text.contains("\"type\": \"label\""))
+        assertTrue(text.contains("\"type\": \"jump\""))
+        assertTrue(text.contains("\"type\": \"if\""))
+        assertTrue(text.contains("\"type\": \"element\""))
+        assertTrue(text.contains("\"type\": \"color\""))
+        assertTrue(text.contains("\"type\": \"var_compare\""))
     }
 
     @Test

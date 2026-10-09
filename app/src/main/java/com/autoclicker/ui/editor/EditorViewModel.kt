@@ -5,7 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
 import com.autoclicker.core.script.Step
-import com.autoclicker.core.script.newId
+import com.autoclicker.core.script.withDelay
+import com.autoclicker.core.script.withNewId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -96,24 +97,15 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         _script.value = _script.value?.copy(jitterDelayPercent = value.coerceIn(0, 50))
     }
 
+    /** 统一设置所有步骤的执行前延时（P2）。 */
+    fun setAllStepDelay(value: Long) {
+        val delay = value.coerceAtLeast(0L)
+        _script.value = _script.value?.let { script ->
+            script.copy(steps = script.steps.map { it.withDelay(delay) })
+        }
+    }
+
     fun save() {
         _script.value?.let { _script.value = repository.save(it) }
     }
-}
-
-/** 生成新 id 的副本（保留其余字段）。 */
-private fun Step.withNewId(): Step = when (this) {
-    is Step.Tap -> copy(id = newId())
-    is Step.LongPress -> copy(id = newId())
-    is Step.Swipe -> copy(id = newId())
-    is Step.Input -> copy(id = newId())
-    is Step.Wait -> copy(id = newId())
-    is Step.LaunchApp -> copy(id = newId())
-    is Step.WaitForElement -> copy(id = newId())
-    is Step.Back -> copy(id = newId())
-    is Step.Home -> copy(id = newId())
-    is Step.Burst -> copy(id = newId())
-    is Step.TapElement -> copy(id = newId())
-    is Step.ImageTap -> copy(id = newId())
-    is Step.ColorTap -> copy(id = newId())
 }

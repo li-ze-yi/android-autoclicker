@@ -72,6 +72,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- 通知触发监听服务（P3）：需用户在系统「通知使用权」中手动授权 -->
+        <service
+            android:name=".core.trigger.NotificationTriggerService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- 识图截屏前台服务 -->
         <service
             android:name=".core.vision.ScreenCaptureService"
