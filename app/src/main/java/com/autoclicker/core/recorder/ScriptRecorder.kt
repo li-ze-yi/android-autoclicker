@@ -4,6 +4,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
+import com.autoclicker.core.accessibility.GestureExecutor
 import com.autoclicker.core.accessibility.NodeFinder
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.Step
@@ -12,17 +13,25 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.hypot
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * 录制器：把用户操作转换为脚本步骤。
  *
- * 当前生效的是无障碍事件路径（[onAccessibilityEvent]）：点击/长按取控件包围盒中心作为坐标，
+ * 默认走无障碍事件路径（[onAccessibilityEvent]）：点击/长按取控件包围盒中心作为坐标，
  * 滚动换算为近似滑动，并用系统时钟测量动作之间的间隔写入下一步的 `delayBeforeMs`。
  * [onRawTouch] 为原始触点入口，当前无调用方（`AccessibilityService.onMotionEvent` 不在公开 SDK 中，
  * 无法在第三方 App 内覆盖），保留以备后续接入。
+ *
+ * 精确录制模式（[preciseMode]）下改为走采集层路径（[onCaptureTouch]）：由覆盖在屏幕上的全屏可触摸
+ * 采集层把触摸事件吞下来，逐点精确记录，并在抬手后回放同款手势给下方的目标 App。此模式下
+ * [onAccessibilityEvent] 不再录入，避免同一动作被双路径重复记录。
  */
 object ScriptRecorder {
 
@@ -49,6 +58,18 @@ object ScriptRecorder {
     private const val OFFSET_MIN = 120f
     private const val OFFSET_MAX = 400f
 
+    /** 回放手势的时长下限（毫秒）：过短的时长在部分设备上会被系统手势识别丢弃。 */
+    private const val REPLAY_MIN_DURATION_MS = 16L
+
+    /**
+     * 回放专用协程作用域。
+     *
+     * 回放调用 [GestureExecutor] 的挂起函数（内部需要等待系统手势回调），必须异步执行，
+     * 否则会阻塞采集层的触摸回调（在主线程分发），导致掉帧甚至 ANR。
+     * 用 [SupervisorJob] 让单次回放失败不影响后续回放。
+     */
+    private val replayScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private val buffer = mutableListOf<Step>()
     private var recording = false
 
@@ -73,6 +94,22 @@ object ScriptRecorder {
     private val _stepCount = MutableStateFlow(0)
     val stepCount: StateFlow<Int> = _stepCount.asStateFlow()
 
+    private val _preciseMode = MutableStateFlow(false)
+
+    /**
+     * 是否启用精确录制模式。默认 false，保持既有的无障碍事件录制行为不变。
+     * 启用后录制改由采集层（[onCaptureTouch]）负责，且 [onAccessibilityEvent] 不再录入。
+     */
+    val preciseMode: StateFlow<Boolean> = _preciseMode.asStateFlow()
+
+    private val _recordPaused = MutableStateFlow(false)
+
+    /**
+     * 录制是否处于暂停。精确模式下用于打字等无法回放的场景：暂停期间采集层的触摸既不记录也不回放，
+     * 直接放行；这样用户仍能正常操作目标 App，只是这些动作不会被录进脚本。
+     */
+    val recordPaused: StateFlow<Boolean> = _recordPaused.asStateFlow()
+
     /**
      * 悬浮球/面板的屏幕矩形。录制时落在其中的触点要忽略，避免录到自己的悬浮窗。
      * 由 OverlayService 设置。
@@ -80,15 +117,32 @@ object ScriptRecorder {
     @Volatile
     var ignoredRegion: Rect? = null
 
+    /**
+     * 设置是否启用精确录制模式。由用户选择决定，切换时不影响进行中的录制缓冲与手势状态。
+     */
+    fun setPreciseMode(enabled: Boolean) {
+        _preciseMode.value = enabled
+    }
+
+    /**
+     * 设置录制暂停状态。暂停时采集层手势既不记录也不回放；恢复前会重置进行中的手势状态，
+     * 避免暂停期间残留的半程手势（如下按时被暂停、抬手时被恢复）在恢复后被误判成一次点击。
+     */
+    fun setRecordPaused(paused: Boolean) {
+        if (paused) {
+            resetGestureState()
+        }
+        _recordPaused.value = paused
+    }
+
     /** 开始录制，清空已有缓冲并重置全部状态（不清空 [ignoredRegion]）。 */
     fun start() {
         buffer.clear()
         recording = true
-        tracking = false
-        skipCurrent = false
-        lastGestureEndMs = 0L
+        resetGestureState()
         lastEventEndMs = 0L
         lastSwipeAt = 0L
+        _recordPaused.value = false
         _isRecording.value = true
         _stepCount.value = 0
     }
@@ -99,7 +153,8 @@ object ScriptRecorder {
             return null
         }
         recording = false
-        tracking = false
+        resetGestureState()
+        _recordPaused.value = false
         _isRecording.value = false
 
         if (buffer.isEmpty()) {
@@ -115,19 +170,48 @@ object ScriptRecorder {
     fun cancel() {
         recording = false
         buffer.clear()
-        tracking = false
-        skipCurrent = false
-        lastGestureEndMs = 0L
+        resetGestureState()
         lastEventEndMs = 0L
         lastSwipeAt = 0L
+        _recordPaused.value = false
         _isRecording.value = false
         _stepCount.value = 0
     }
 
-    /** 原始触点入口。当前无调用方，保留备用（见类注释）。 */
+    /** 重置原始/采集触点状态机，避免残留的半程手势影响下一次记录或回放。 */
+    private fun resetGestureState() {
+        tracking = false
+        skipCurrent = false
+        lastGestureEndMs = 0L
+        pendingDelayMs = 0L
+    }
+
+    /** 原始触点入口。当前无调用方，保留备用（见类注释）；不触发回放。 */
     fun onRawTouch(event: MotionEvent) {
         if (!recording) return
+        handleTouch(event, replay = false)
+    }
 
+    /**
+     * 采集层触摸入口：记录手势（含与上一动作的间隔），并在抬手后回放给目标 App。
+     *
+     * 由覆盖在屏幕上的全屏可触摸采集层调用。未在录制、已暂停或落在 [ignoredRegion] 内的手势
+     * 既不记录也不回放。记录与回放共用 [handleTouch] 状态机，保证判定与坐标一致。
+     */
+    fun onCaptureTouch(event: MotionEvent) {
+        if (!recording) return
+        if (_recordPaused.value) return
+        handleTouch(event, replay = true)
+    }
+
+    /**
+     * 触点状态机（原始触点与采集层共用）。
+     *
+     * 阈值 [TAP_SLOP_PX] 判定点按/滑动，[LONG_PRESS_MS] 判定长按；多指手势与 [ignoredRegion] 内的
+     * 触点整体跳过；动作间隔取 `event.eventTime - lastGestureEndMs` 并上限 [MAX_DELAY_MS]。
+     * [replay] 为 true 时（采集层路径）在抬手完成分类后，异步把同款手势回放给下方目标 App。
+     */
+    private fun handleTouch(event: MotionEvent, replay: Boolean) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // 多指手势整体跳过。
@@ -177,7 +261,7 @@ object ScriptRecorder {
                 val duration = (event.eventTime - downTimeMs).coerceAtLeast(1L)
 
                 when {
-                    distance < TAP_SLOP_PX && duration >= LONG_PRESS_MS ->
+                    distance < TAP_SLOP_PX && duration >= LONG_PRESS_MS -> {
                         append(
                             Step.LongPress(
                                 delayBeforeMs = pendingDelayMs,
@@ -186,11 +270,15 @@ object ScriptRecorder {
                                 durationMs = duration
                             )
                         )
+                        if (replay) replayTapLike(downX, downY, duration)
+                    }
 
-                    distance < TAP_SLOP_PX ->
+                    distance < TAP_SLOP_PX -> {
                         append(Step.Tap(delayBeforeMs = pendingDelayMs, x = downX, y = downY))
+                        if (replay) replayTapLike(downX, downY, duration)
+                    }
 
-                    else ->
+                    else -> {
                         append(
                             Step.Swipe(
                                 delayBeforeMs = pendingDelayMs,
@@ -201,6 +289,8 @@ object ScriptRecorder {
                                 durationMs = duration
                             )
                         )
+                        if (replay) replaySwipe(downX, downY, upX, upY, duration)
+                    }
                 }
             }
 
@@ -213,9 +303,40 @@ object ScriptRecorder {
     }
 
     /**
+     * 异步回放一次点按类手势（点击与长按共用）。
+     *
+     * 用 [GestureExecutor.longPress] 而非 [GestureExecutor.click]：`click` 固定 50ms，无法还原用户
+     * 实际按住的时长（含长按），而 `longPress` 可指定任意时长，等价于"按住 duration 毫秒"，手感与
+     * 记录到的 [Step] 一致。起点取按下点 (x, y)，与步骤里记录的坐标保持同一基准。
+     *
+     * 回放放在 [replayScope] 里异步执行，避免同步等待系统手势回调阻塞采集层触摸分发（主线程）。
+     * 回放失败（返回 false）不影响录制，此处直接忽略返回值。
+     */
+    private fun replayTapLike(x: Float, y: Float, durationMs: Long) {
+        val safe = durationMs.coerceIn(REPLAY_MIN_DURATION_MS, MAX_DELAY_MS)
+        replayScope.launch {
+            GestureExecutor.longPress(x = x, y = y, durationMs = safe)
+        }
+    }
+
+    /**
+     * 异步回放一次滑动。[GestureExecutor.swipe] 同样放到 [replayScope] 中执行，理由见 [replayTapLike]。
+     */
+    private fun replaySwipe(x1: Float, y1: Float, x2: Float, y2: Float, durationMs: Long) {
+        val safe = durationMs.coerceIn(REPLAY_MIN_DURATION_MS, MAX_DELAY_MS)
+        replayScope.launch {
+            GestureExecutor.swipe(x1 = x1, y1 = y1, x2 = x2, y2 = y2, durationMs = safe)
+        }
+    }
+
+    /**
      * 无障碍事件入口：录制点击、长按与滚动，并测量与上一次动作的间隔。
+     *
+     * 精确模式（[preciseMode]）下直接返回：此模式由采集层路径负责录入，若继续处理无障碍事件
+     * 会把同一次动作重复记入脚本。
      */
     fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (preciseMode.value) return
         if (!recording) return
         if (event == null) return
         if (event.packageName?.toString() == SELF_PACKAGE) return

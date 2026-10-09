@@ -128,6 +128,8 @@ class OverlayService : Service() {
     private var miniBarParams: WindowManager.LayoutParams? = null
     private var pickView: View? = null
     private var regionPickView: View? = null
+    private var captureLayerView: View? = null
+    private var captureLayerParams: WindowManager.LayoutParams? = null
     private var subscribed = false
     private var editorShowing = false
 
@@ -151,9 +153,36 @@ class OverlayService : Service() {
             }
             updateRecorderIgnoredRegion()
             ScriptRecorder.start()
-            toast("录制已开始，请切到目标 App 操作")
+            if (ScriptRecorder.preciseMode.value) {
+                showCaptureLayer()
+                toast("精确录制已开始：触摸会被采集并回放，打字请先暂停录制")
+            } else {
+                toast("录制已开始，请切到目标 App 操作")
+            }
         }
         override fun onStopRecord() = finishRecording()
+        override fun onTogglePreciseMode() {
+            val next = !ScriptRecorder.preciseMode.value
+            ScriptRecorder.setPreciseMode(next)
+            toast(if (next) "已开启精确录制" else "已关闭精确录制")
+            updateStatus()
+        }
+        override fun onToggleRecordPause() {
+            val next = !ScriptRecorder.recordPaused.value
+            ScriptRecorder.setRecordPaused(next)
+            if (next) {
+                // 暂停：移除采集层，触摸直接落到目标 App（打字所需），
+                // 同时 ScriptRecorder.onCaptureTouch 不再被调用，语义正确。
+                hideCaptureLayer()
+                toast("录制已暂停（触摸将直接作用于 App）")
+            } else {
+                if (ScriptRecorder.isRecording.value && ScriptRecorder.preciseMode.value) {
+                    showCaptureLayer()
+                }
+                toast("录制已继续")
+            }
+            updateStatus()
+        }
         override fun onRefreshScripts() = refreshScripts()
         override fun onOpenApp() = openApp()
         override fun onCloseOverlay() = OverlayService.stop(this@OverlayService)
@@ -291,6 +320,8 @@ class OverlayService : Service() {
         scope.launch { ScriptRunner.state.collect { updateStatus() } }
         scope.launch { ScriptRecorder.isRecording.collect { updateStatus() } }
         scope.launch { ScriptRecorder.stepCount.collect { updateStatus() } }
+        scope.launch { ScriptRecorder.preciseMode.collect { updateStatus() } }
+        scope.launch { ScriptRecorder.recordPaused.collect { updateStatus() } }
     }
 
     private fun updateStatus() {
@@ -305,7 +336,14 @@ class OverlayService : Service() {
         val panel = panelView
         if (panel != null) {
             OverlayUi.setStatus(panel, statusText)
-            OverlayUi.setPanelControls(panel, state, recording, clickerRunning)
+            OverlayUi.setPanelControls(
+                panel,
+                state,
+                recording,
+                clickerRunning,
+                ScriptRecorder.preciseMode.value,
+                ScriptRecorder.recordPaused.value
+            )
             val stepIndex = when (state) {
                 is RunnerState.Running -> state.stepIndex
                 is RunnerState.Paused -> state.stepIndex
@@ -316,7 +354,12 @@ class OverlayService : Service() {
 
         val miniBar = miniBarView
         if (miniBar != null) {
-            OverlayUi.setMiniBarStatus(miniBar, statusText, active)
+            val miniText = buildString {
+                append(statusText)
+                if (recording) append("｜录制中(${stepCount})")
+                if (ScriptRecorder.recordPaused.value) append("｜已暂停")
+            }
+            OverlayUi.setMiniBarStatus(miniBar, miniText, active)
         }
 
         val ball = ballView
@@ -491,6 +534,43 @@ class OverlayService : Service() {
         refreshScripts()
         updateStatus()
         updateRecorderIgnoredRegion()
+    }
+
+    // ---- 精确录制采集层 ----
+
+    /** 显示全屏触摸采集层（精确录制用）。 */
+    private fun showCaptureLayer() {
+        if (captureLayerView != null) return
+        val view = OverlayUi.createCaptureLayer(this) { e -> ScriptRecorder.onCaptureTouch(e) }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        )
+        params.gravity = Gravity.TOP or Gravity.START
+        if (!addView(view, params)) return
+        captureLayerView = view
+        captureLayerParams = params
+
+        // z-order：采集层是全屏且吞触摸的，必须让悬浮球与迷你条位于其之上，
+        // 否则用户无法点击「结束录制」。先把控制控件移除并置空，再重新添加一次以提升层级。
+        removeView(ballView)
+        ballView = null
+        ballParams = null
+        removeView(miniBarView)
+        miniBarView = null
+        miniBarParams = null
+        showBall()
+        if (mode == OverlayMode.MINI_BAR) showMiniBar()
+    }
+
+    /** 移除采集层。 */
+    private fun hideCaptureLayer() {
+        removeView(captureLayerView)
+        captureLayerView = null
+        captureLayerParams = null
     }
 
     // ---- 坐标拾取 ----
@@ -757,8 +837,13 @@ class OverlayService : Service() {
     private fun finishRecording() {
         val script = ScriptRecorder.stop()
         ScriptRecorder.ignoredRegion = null
+        hideCaptureLayer()
         if (script == null) {
-            toast("未录制到任何操作（请确认已开启无障碍服务，并在目标 App 中操作）")
+            if (ScriptRecorder.preciseMode.value) {
+                toast("未录制到任何操作（精确模式下请确认已开启无障碍服务）")
+            } else {
+                toast("未录制到任何操作（请确认已开启无障碍服务，并在目标 App 中操作）")
+            }
             return
         }
         ScriptRepository.get(this).save(script)
@@ -960,6 +1045,9 @@ class OverlayService : Service() {
         pickView = null
         removeView(regionPickView)
         regionPickView = null
+        removeView(captureLayerView)
+        captureLayerView = null
+        captureLayerParams = null
         removeView(markerView)
         markerView = null
         markerParams = null

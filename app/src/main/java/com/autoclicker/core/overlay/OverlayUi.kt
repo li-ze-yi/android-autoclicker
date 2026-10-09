@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -47,6 +48,8 @@ internal object OverlayUi {
     private const val KEY_OPEN_APP = "openApp"
     private const val KEY_CLOSE = "close"
     private const val KEY_CLICKER_MODE = "clickerMode"
+    private const val KEY_PRECISE_MODE = "preciseMode"
+    private const val KEY_RECORD_PAUSE = "recordPause"
 
     /** 面板按钮与步骤行回调。 */
     interface PanelCallbacks {
@@ -69,6 +72,8 @@ internal object OverlayUi {
         fun onCollapseMiniBar()
         fun onExpandPanel()
         fun onHideToBall()
+        fun onTogglePreciseMode()
+        fun onToggleRecordPause()
     }
 
     /** 直径 48dp 的圆形悬浮球。 */
@@ -174,6 +179,13 @@ internal object OverlayUi {
         )
         addRow(context, root, row2)
 
+        val preciseRow = row(
+            context,
+            registerButton(holder, KEY_PRECISE_MODE, button(context, "精确:关") { callbacks.onTogglePreciseMode() }),
+            registerButton(holder, KEY_RECORD_PAUSE, button(context, "暂停录制") { callbacks.onToggleRecordPause() })
+        )
+        addRow(context, root, preciseRow)
+
         val row3 = row(
             context,
             registerButton(holder, KEY_REFRESH, button(context, "刷新") { callbacks.onRefreshScripts() }),
@@ -216,6 +228,28 @@ internal object OverlayUi {
             Gravity.CENTER
         )
         root.addView(hint, lp)
+        return root
+    }
+
+    /**
+     * 全屏透明采集层：吞掉全部触摸并逐条回调。
+     * 用于「精确录制模式」——由 ScriptRecorder 记录并回放给目标 App。
+     */
+    fun createCaptureLayer(context: Context, onTouch: (MotionEvent) -> Unit): View {
+        val root = FrameLayout(context)
+        // 背景完全透明，不影响下方 App 的正常显示；极淡描边（0x22FFC107）
+        // 仅为让用户感知当前处于采集态，不拦截视觉也不改变触摸行为。
+        root.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(Color.TRANSPARENT)
+            setStroke(dp(context, 2f), 0x22FFC107)
+        }
+        root.isClickable = true
+        // 必须 return true 吞掉事件，否则触摸会落到下面的 App，导致录入与显示不一致。
+        root.setOnTouchListener { _, e ->
+            onTouch(e)
+            true
+        }
         return root
     }
 
@@ -313,8 +347,15 @@ internal object OverlayUi {
         }
     }
 
-    /** 按运行/录制/点击器状态刷新面板按钮的可用性与文案。 */
-    fun setPanelControls(panel: View, runner: RunnerState, recording: Boolean, clickerRunning: Boolean) {
+    /** 按运行/录制/点击器/精确模式状态刷新面板按钮的可用性与文案。 */
+    fun setPanelControls(
+        panel: View,
+        runner: RunnerState,
+        recording: Boolean,
+        clickerRunning: Boolean,
+        preciseMode: Boolean,
+        recordPaused: Boolean
+    ) {
         val holder = panel.tag as? PanelHolder ?: return
         val buttons = holder.buttons
         val active = runner.isActive
@@ -327,6 +368,16 @@ internal object OverlayUi {
         buttons[KEY_START_RECORD]?.text = if (recording) "录制中…" else "开始录制"
         setButtonEnabled(buttons[KEY_START_RECORD], !recording)
         setButtonEnabled(buttons[KEY_STOP_RECORD], recording)
+
+        // 精确模式按钮：运行时可切换，但录制途中禁止切换以免状态错乱。
+        val preciseButton = buttons[KEY_PRECISE_MODE]
+        preciseButton?.text = if (preciseMode) "精确:开" else "精确:关"
+        setButtonEnabled(preciseButton, !recording)
+
+        // 暂停录制按钮：仅精确模式录制中可用，文案随暂停状态切换。
+        val pauseButton = buttons[KEY_RECORD_PAUSE]
+        pauseButton?.text = if (recordPaused) "继续录制" else "暂停录制"
+        setButtonEnabled(pauseButton, recording && preciseMode)
 
         setButtonEnabled(buttons[KEY_CLICKER_MODE], !clickerRunning)
 
