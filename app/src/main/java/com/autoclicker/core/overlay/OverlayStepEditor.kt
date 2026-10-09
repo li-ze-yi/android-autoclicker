@@ -124,25 +124,27 @@ internal object OverlayStepEditor {
             is Step.Tap -> {
                 addField("x", "X", step.x.toString(), true)
                 addField("y", "Y", step.y.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val x = f("x")
                     val y = f("y")
                     if (x == null || y == null) null
                     else step.copy(x = x, y = y, note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.LongPress -> {
                 addField("x", "X", step.x.toString(), true)
                 addField("y", "Y", step.y.toString(), true)
                 addField("duration", "时长(ms)", step.durationMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val x = f("x")
                     val y = f("y")
                     val d = l("duration")
                     if (x == null || y == null || d == null) null
                     else step.copy(x = x, y = y, durationMs = d, note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.Swipe -> {
@@ -151,7 +153,7 @@ internal object OverlayStepEditor {
                 addField("x2", "X2", step.x2.toString(), true)
                 addField("y2", "Y2", step.y2.toString(), true)
                 addField("duration", "时长(ms)", step.durationMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val x1 = f("x1")
                     val y1 = f("y1")
                     val x2 = f("x2")
@@ -160,28 +162,32 @@ internal object OverlayStepEditor {
                     if (x1 == null || y1 == null || x2 == null || y2 == null || d == null) null
                     else step.copy(x1 = x1, y1 = y1, x2 = x2, y2 = y2, durationMs = d, note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.Input -> {
                 addField("text", "文本", step.text, false)
-                {
+                val reader: () -> Step? = {
                     step.copy(text = s("text"), note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.Wait -> {
                 addField("duration", "时长(ms)", step.durationMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val d = l("duration")
                     if (d == null) null else step.copy(durationMs = d, note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.LaunchApp -> {
                 addField("pkg", "包名", step.packageName, false)
-                {
+                val reader: () -> Step? = {
                     step.copy(packageName = s("pkg"), note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.WaitForElement -> {
@@ -190,7 +196,7 @@ internal object OverlayStepEditor {
                 addField("contentDesc", "描述", step.contentDesc ?: "", false)
                 addField("className", "类名", step.className ?: "", false)
                 addField("timeout", "超时(ms)", step.timeoutMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val t = l("timeout")
                     if (t == null) null
                     else step.copy(
@@ -203,20 +209,23 @@ internal object OverlayStepEditor {
                         delayBeforeMs = parsedDelay()
                     )
                 }
+                reader
             }
 
             is Step.Back -> {
                 hintLabel("返回键无需参数")
-                {
+                val reader: () -> Step? = {
                     step.copy(note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.Home -> {
                 hintLabel("主页键无需参数")
-                {
+                val reader: () -> Step? = {
                     step.copy(note = s("note"), delayBeforeMs = parsedDelay())
                 }
+                reader
             }
 
             is Step.Burst -> {
@@ -225,7 +234,7 @@ internal object OverlayStepEditor {
                 addField("count", "次数", step.count.toString(), true)
                 addField("interval", "间隔(ms)", step.intervalMs.toString(), true)
                 addField("touch", "触摸时长(ms)", step.touchDurationMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val x = f("x")
                     val y = f("y")
                     val c = i("count")
@@ -237,6 +246,7 @@ internal object OverlayStepEditor {
                         note = s("note"), delayBeforeMs = parsedDelay()
                     )
                 }
+                reader
             }
 
             is Step.TapElement -> {
@@ -246,7 +256,7 @@ internal object OverlayStepEditor {
                 addField("className", "类名", step.className ?: "", false)
                 addField("index", "序号index", step.index.toString(), true)
                 addField("timeout", "超时(ms)", step.timeoutMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val idx = i("index")
                     val t = l("timeout")
                     if (idx == null || t == null) null
@@ -261,6 +271,7 @@ internal object OverlayStepEditor {
                         delayBeforeMs = parsedDelay()
                     )
                 }
+                reader
             }
 
             is Step.ImageTap -> {
@@ -273,7 +284,7 @@ internal object OverlayStepEditor {
                 addField("offsetX", "偏移X", step.offsetX.toString(), true)
                 addField("offsetY", "偏移Y", step.offsetY.toString(), true)
                 addField("timeout", "超时(ms)", step.timeoutMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val th = i("threshold")
                     val rl = i("regionLeft")
                     val rt = i("regionTop")
@@ -299,6 +310,7 @@ internal object OverlayStepEditor {
                         delayBeforeMs = parsedDelay()
                     )
                 }
+                reader
             }
 
             is Step.ColorTap -> {
@@ -311,7 +323,7 @@ internal object OverlayStepEditor {
                 addField("offsetX", "偏移X", step.offsetX.toString(), true)
                 addField("offsetY", "偏移Y", step.offsetY.toString(), true)
                 addField("timeout", "超时(ms)", step.timeoutMs.toString(), true)
-                {
+                val reader: () -> Step? = {
                     val color = parseColor(s("color"))
                     val tol = i("tolerance")
                     val rl = i("regionLeft")
@@ -338,6 +350,7 @@ internal object OverlayStepEditor {
                         delayBeforeMs = parsedDelay()
                     )
                 }
+                reader
             }
         }
 

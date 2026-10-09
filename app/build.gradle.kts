@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.autoclicker"
-    compileSdk = 34
+    // compileSdk 35 用于启用 AccessibilityService.onMotionEvent（原始触点录制，Android 15+）；
+    // targetSdk 仍保持 34，避免引入新的运行时行为限制。
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.autoclicker"
