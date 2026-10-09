@@ -13,8 +13,11 @@ sealed interface RunnerState {
     data class Running(
         val scriptId: String,
         val scriptName: String,
-        val stepIndex: Int,
-        val totalSteps: Int
+        val stepIndex: Int,        // 从 0 开始
+        val totalSteps: Int,
+        val stepText: String,      // 当前步骤可读描述，来自 step.describe()
+        val loopIndex: Int,        // 当前第几轮，从 0 开始
+        val totalLoops: Int        // 无限循环时为 -1
     ) : RunnerState {
         override val isActive: Boolean get() = true
     }
@@ -22,8 +25,11 @@ sealed interface RunnerState {
     data class Paused(
         val scriptId: String,
         val scriptName: String,
-        val stepIndex: Int,
-        val totalSteps: Int
+        val stepIndex: Int,        // 从 0 开始
+        val totalSteps: Int,
+        val stepText: String,      // 当前步骤可读描述，来自 step.describe()
+        val loopIndex: Int,        // 当前第几轮，从 0 开始
+        val totalLoops: Int        // 无限循环时为 -1
     ) : RunnerState {
         override val isActive: Boolean get() = true
     }

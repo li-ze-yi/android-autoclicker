@@ -4,6 +4,8 @@ import android.app.TimePickerDialog
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +27,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -47,15 +51,18 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,9 +75,19 @@ import com.autoclicker.core.script.typeLabel
 import com.autoclicker.core.trigger.TriggerRecord
 import com.autoclicker.core.trigger.TriggerScheduler
 import com.autoclicker.core.util.PermissionChecker
+import com.autoclicker.core.vision.CapturePermissionActivity
+import com.autoclicker.core.vision.ColorMatcher
+import com.autoclicker.core.vision.ImageTemplateRepository
+import com.autoclicker.core.vision.ScreenCaptureService
+import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val ROW_HEIGHT = 64.dp
+
+private val NumberKeyboard = KeyboardOptions(keyboardType = KeyboardType.Number)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,6 +152,16 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
                 Text("加载中")
             }
         } else {
+            var loopCountStr by remember(current.id) { mutableStateOf(current.loopCount.toString()) }
+            var loopIntervalStr by remember(current.id) {
+                mutableStateOf(current.loopIntervalMs.toString())
+            }
+            var jitterRadiusStr by remember(current.id) {
+                mutableStateOf(current.jitterRadiusPx.toString())
+            }
+            var jitterDelayStr by remember(current.id) {
+                mutableStateOf(current.jitterDelayPercent.toString())
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -156,6 +183,101 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
                         checked = current.stopOnError,
                         onCheckedChange = { viewModel.updateStopOnError(it) }
                     )
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("循环与拟人化", style = MaterialTheme.typography.titleMedium)
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("无限循环", modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = current.loopInfinite,
+                                onCheckedChange = { viewModel.updateLoopInfinite(it) }
+                            )
+                        }
+
+                        NumberSettingField(
+                            value = loopCountStr,
+                            onValueChange = { loopCountStr = it },
+                            label = "循环次数",
+                            enabled = !current.loopInfinite,
+                            onCommit = { text ->
+                                val n = text.trim().toIntOrNull()
+                                if (n == null) {
+                                    loopCountStr = current.loopCount.toString()
+                                    Toast.makeText(context, "循环次数需为整数", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val clamped = n.coerceAtLeast(1)
+                                    viewModel.updateLoopCount(clamped)
+                                    loopCountStr = clamped.toString()
+                                }
+                            }
+                        )
+
+                        NumberSettingField(
+                            value = loopIntervalStr,
+                            onValueChange = { loopIntervalStr = it },
+                            label = "循环间隔(ms)",
+                            onCommit = { text ->
+                                val n = text.trim().toLongOrNull()
+                                if (n == null) {
+                                    loopIntervalStr = current.loopIntervalMs.toString()
+                                    Toast.makeText(context, "循环间隔需为整数", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val clamped = n.coerceAtLeast(0L)
+                                    viewModel.updateLoopIntervalMs(clamped)
+                                    loopIntervalStr = clamped.toString()
+                                }
+                            }
+                        )
+
+                        HorizontalDivider()
+
+                        NumberSettingField(
+                            value = jitterRadiusStr,
+                            onValueChange = { jitterRadiusStr = it },
+                            label = "坐标随机偏移(px)",
+                            onCommit = { text ->
+                                val n = text.trim().toIntOrNull()
+                                if (n == null) {
+                                    jitterRadiusStr = current.jitterRadiusPx.toString()
+                                    Toast.makeText(context, "坐标偏移需为整数", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val clamped = n.coerceAtLeast(0)
+                                    viewModel.updateJitterRadiusPx(clamped)
+                                    jitterRadiusStr = clamped.toString()
+                                }
+                            }
+                        )
+
+                        NumberSettingField(
+                            value = jitterDelayStr,
+                            onValueChange = { jitterDelayStr = it },
+                            label = "延时随机浮动(%)",
+                            onCommit = { text ->
+                                val n = text.trim().toIntOrNull()
+                                if (n == null) {
+                                    jitterDelayStr = current.jitterDelayPercent.toString()
+                                    Toast.makeText(context, "延时浮动需为整数", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val clamped = n.coerceIn(0, 50)
+                                    viewModel.updateJitterDelayPercent(clamped)
+                                    jitterDelayStr = clamped.toString()
+                                }
+                            }
+                        )
+
+                        Text(
+                            "模拟人工点击，降低被识别为脚本的风险",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
 
                 HorizontalDivider()
@@ -276,6 +398,9 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
         val metrics = context.resources.displayMetrics
         val centerX = metrics.widthPixels / 2f
         val centerY = metrics.heightPixels / 2f
+        val defaultTemplateId = remember {
+            ImageTemplateRepository.get(context).list().firstOrNull()?.id ?: ""
+        }
         val entries = listOf<Pair<String, () -> Step>>(
             "点击" to { Step.Tap(x = centerX, y = centerY) },
             "长按" to { Step.LongPress(x = centerX, y = centerY) },
@@ -285,7 +410,11 @@ fun EditorScreen(scriptId: String, onBack: () -> Unit) {
             "启动应用" to { Step.LaunchApp(packageName = "") },
             "等待元素" to { Step.WaitForElement() },
             "返回键" to { Step.Back() },
-            "主页键" to { Step.Home() }
+            "主页键" to { Step.Home() },
+            "连点" to { Step.Burst(x = centerX, y = centerY) },
+            "智能定位点击" to { Step.TapElement(text = "文本") },
+            "识图点击" to { Step.ImageTap(templateId = defaultTemplateId) },
+            "识色点击" to { Step.ColorTap(color = -65536) }
         )
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
@@ -400,6 +529,7 @@ private fun StepRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StepEditDialog(
     step: Step,
@@ -407,6 +537,8 @@ private fun StepEditDialog(
     onConfirm: (Step) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val templateRepo = remember { ImageTemplateRepository.get(context) }
     var note by remember(step.id) { mutableStateOf(step.note) }
     var xStr by remember(step.id) { mutableStateOf(initialX(step)) }
     var yStr by remember(step.id) { mutableStateOf(initialY(step)) }
@@ -420,19 +552,77 @@ private fun StepEditDialog(
         mutableStateOf((step as? Step.LaunchApp)?.packageName ?: "")
     }
     var viewIdStr by remember(step.id) {
-        mutableStateOf((step as? Step.WaitForElement)?.viewId ?: "")
+        mutableStateOf((step as? Step.WaitForElement)?.viewId ?: (step as? Step.TapElement)?.viewId ?: "")
     }
     var descStr by remember(step.id) {
-        mutableStateOf((step as? Step.WaitForElement)?.contentDesc ?: "")
+        mutableStateOf(
+            (step as? Step.WaitForElement)?.contentDesc
+                ?: (step as? Step.TapElement)?.contentDesc ?: ""
+        )
     }
     var classNameStr by remember(step.id) {
-        mutableStateOf((step as? Step.WaitForElement)?.className ?: "")
+        mutableStateOf(
+            (step as? Step.WaitForElement)?.className
+                ?: (step as? Step.TapElement)?.className ?: ""
+        )
     }
     var timeoutStr by remember(step.id) {
-        mutableStateOf(((step as? Step.WaitForElement)?.timeoutMs ?: 10000L).toString())
+        mutableStateOf(initialTimeoutMs(step).toString())
     }
     var onTimeout by remember(step.id) {
-        mutableStateOf((step as? Step.WaitForElement)?.onTimeout ?: OnTimeout.STOP)
+        mutableStateOf(initialOnTimeout(step))
+    }
+    var countStr by remember(step.id) {
+        mutableStateOf(((step as? Step.Burst)?.count ?: 10).toString())
+    }
+    var intervalStr by remember(step.id) {
+        mutableStateOf(((step as? Step.Burst)?.intervalMs ?: 100L).toString())
+    }
+    var touchDurStr by remember(step.id) {
+        mutableStateOf(((step as? Step.Burst)?.touchDurationMs ?: 50L).toString())
+    }
+    var indexStr by remember(step.id) {
+        mutableStateOf(((step as? Step.TapElement)?.index ?: 0).toString())
+    }
+    var thresholdStr by remember(step.id) {
+        mutableStateOf(((step as? Step.ImageTap)?.thresholdPercent ?: 85).toString())
+    }
+    var toleranceStr by remember(step.id) {
+        mutableStateOf(((step as? Step.ColorTap)?.tolerance ?: 20).toString())
+    }
+    var colorStr by remember(step.id) { mutableStateOf(initialColorText(step)) }
+    var templateId by remember(step.id) {
+        mutableStateOf((step as? Step.ImageTap)?.templateId ?: "")
+    }
+    var regionLeftStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.regionLeft ?: (step as? Step.ColorTap)?.regionLeft ?: 0).toString()
+        )
+    }
+    var regionTopStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.regionTop ?: (step as? Step.ColorTap)?.regionTop ?: 0).toString()
+        )
+    }
+    var regionWidthStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.regionWidth ?: (step as? Step.ColorTap)?.regionWidth ?: 0).toString()
+        )
+    }
+    var regionHeightStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.regionHeight ?: (step as? Step.ColorTap)?.regionHeight ?: 0).toString()
+        )
+    }
+    var offsetXStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.offsetX ?: (step as? Step.ColorTap)?.offsetX ?: 0).toString()
+        )
+    }
+    var offsetYStr by remember(step.id) {
+        mutableStateOf(
+            ((step as? Step.ImageTap)?.offsetY ?: (step as? Step.ColorTap)?.offsetY ?: 0).toString()
+        )
     }
     var error by remember(step.id) { mutableStateOf<String?>(null) }
 
@@ -637,6 +827,338 @@ private fun StepEditDialog(
                     is Step.Back, is Step.Home -> {
                         Text("该步骤没有参数")
                     }
+
+                    is Step.Burst -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = xStr,
+                                onValueChange = { xStr = it },
+                                label = { Text("X") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = yStr,
+                                onValueChange = { yStr = it },
+                                label = { Text("Y") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        OutlinedTextField(
+                            value = countStr,
+                            onValueChange = { countStr = it },
+                            label = { Text("次数") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OutlinedTextField(
+                            value = intervalStr,
+                            onValueChange = { intervalStr = it },
+                            label = { Text("间隔(ms)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OutlinedTextField(
+                            value = touchDurStr,
+                            onValueChange = { touchDurStr = it },
+                            label = { Text("触摸时长(ms)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                    }
+
+                    is Step.TapElement -> {
+                        OutlinedTextField(
+                            value = textStr,
+                            onValueChange = { textStr = it },
+                            label = { Text("文本（可空）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = viewIdStr,
+                            onValueChange = { viewIdStr = it },
+                            label = { Text("资源ID（可空）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = descStr,
+                            onValueChange = { descStr = it },
+                            label = { Text("描述（可空）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = classNameStr,
+                            onValueChange = { classNameStr = it },
+                            label = { Text("类名（可空）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = indexStr,
+                            onValueChange = { indexStr = it },
+                            label = { Text("序号") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OutlinedTextField(
+                            value = timeoutStr,
+                            onValueChange = { timeoutStr = it },
+                            label = { Text("超时(ms)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OnTimeoutSelector(onTimeout) { onTimeout = it }
+                    }
+
+                    is Step.ImageTap -> {
+                        val templates = remember(step.id) { templateRepo.list() }
+                        Text("识图模板", style = MaterialTheme.typography.bodyMedium)
+                        if (templates.isEmpty()) {
+                            Text(
+                                "暂无模板，请先到「识图模板」页创建",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                templates.forEach { template ->
+                                    FilterChip(
+                                        selected = templateId == template.id,
+                                        onClick = { templateId = template.id },
+                                        label = {
+                                            Text("${template.name} ${template.width}x${template.height}")
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                if (!ScreenCaptureService.isReady) {
+                                    CapturePermissionActivity.request(context)
+                                    Toast.makeText(context, "请先授权截屏，再点击「立即截屏」", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    scope.launch {
+                                        val screen = withContext(Dispatchers.IO) {
+                                            ScreenCaptureService.capture(0)
+                                        }
+                                        screen?.recycle()
+                                        Toast.makeText(
+                                            context,
+                                            if (screen != null) {
+                                                "截屏成功，请在「识图模板」页框选保存"
+                                            } else {
+                                                "截屏失败，请重新授权截屏"
+                                            },
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("立即截屏")
+                        }
+                        OutlinedTextField(
+                            value = thresholdStr,
+                            onValueChange = { thresholdStr = it },
+                            label = { Text("阈值%") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = regionLeftStr,
+                                onValueChange = { regionLeftStr = it },
+                                label = { Text("区域左") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = regionTopStr,
+                                onValueChange = { regionTopStr = it },
+                                label = { Text("区域上") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = regionWidthStr,
+                                onValueChange = { regionWidthStr = it },
+                                label = { Text("区域宽(0=全屏)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = regionHeightStr,
+                                onValueChange = { regionHeightStr = it },
+                                label = { Text("区域高(0=全屏)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = offsetXStr,
+                                onValueChange = { offsetXStr = it },
+                                label = { Text("偏移X") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = offsetYStr,
+                                onValueChange = { offsetYStr = it },
+                                label = { Text("偏移Y") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        OutlinedTextField(
+                            value = timeoutStr,
+                            onValueChange = { timeoutStr = it },
+                            label = { Text("超时(ms)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OnTimeoutSelector(onTimeout) { onTimeout = it }
+                    }
+
+                    is Step.ColorTap -> {
+                        OutlinedTextField(
+                            value = colorStr,
+                            onValueChange = { colorStr = it },
+                            label = { Text("颜色(#RRGGBB / 0x... / 十进制)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                if (!ScreenCaptureService.isReady) {
+                                    CapturePermissionActivity.request(context)
+                                    Toast.makeText(context, "请先授权截屏，再点击「拾取屏幕颜色」", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    scope.launch {
+                                        val screen = withContext(Dispatchers.IO) {
+                                            ScreenCaptureService.capture(0)
+                                        }
+                                        if (screen == null) {
+                                            Toast.makeText(context, "截屏失败，请重新授权截屏", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val picked = ColorMatcher.colorAt(
+                                                screen,
+                                                screen.width / 2,
+                                                screen.height / 2
+                                            )
+                                            screen.recycle()
+                                            if (picked != null) {
+                                                colorStr = "#%06X".format(Locale.US, picked and 0xFFFFFF)
+                                                Toast.makeText(
+                                                    context,
+                                                    "已取屏幕中心颜色，可手动微调",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } else {
+                                                Toast.makeText(context, "取色失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("拾取屏幕颜色")
+                        }
+                        OutlinedTextField(
+                            value = toleranceStr,
+                            onValueChange = { toleranceStr = it },
+                            label = { Text("容差") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = regionLeftStr,
+                                onValueChange = { regionLeftStr = it },
+                                label = { Text("区域左") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = regionTopStr,
+                                onValueChange = { regionTopStr = it },
+                                label = { Text("区域上") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = regionWidthStr,
+                                onValueChange = { regionWidthStr = it },
+                                label = { Text("区域宽(0=全屏)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = regionHeightStr,
+                                onValueChange = { regionHeightStr = it },
+                                label = { Text("区域高(0=全屏)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = offsetXStr,
+                                onValueChange = { offsetXStr = it },
+                                label = { Text("偏移X") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                            OutlinedTextField(
+                                value = offsetYStr,
+                                onValueChange = { offsetYStr = it },
+                                label = { Text("偏移Y") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = NumberKeyboard
+                            )
+                        }
+                        OutlinedTextField(
+                            value = timeoutStr,
+                            onValueChange = { timeoutStr = it },
+                            label = { Text("超时(ms)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = NumberKeyboard
+                        )
+                        OnTimeoutSelector(onTimeout) { onTimeout = it }
+                    }
                 }
 
                 OutlinedTextField(
@@ -753,6 +1275,122 @@ private fun StepEditDialog(
                     is Step.Back -> onConfirm(Step.Back(id = step.id, note = note))
 
                     is Step.Home -> onConfirm(Step.Home(id = step.id, note = note))
+
+                    is Step.Burst -> {
+                        val x = xStr.trim().toFloatOrNull()
+                        val y = yStr.trim().toFloatOrNull()
+                        val c = countStr.trim().toIntOrNull()
+                        val iv = intervalStr.trim().toLongOrNull()
+                        val td = touchDurStr.trim().toLongOrNull()
+                        if (x == null || y == null || c == null || iv == null || td == null) {
+                            error = "请检查坐标与次数等数值"
+                        } else {
+                            onConfirm(
+                                Step.Burst(
+                                    id = step.id,
+                                    note = note,
+                                    x = x,
+                                    y = y,
+                                    count = c,
+                                    intervalMs = iv,
+                                    touchDurationMs = td
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.TapElement -> {
+                        val idx = indexStr.trim().toIntOrNull()
+                        val t = timeoutStr.trim().toLongOrNull()
+                        if (idx == null || t == null) {
+                            error = "请检查序号与超时时间"
+                        } else {
+                            onConfirm(
+                                Step.TapElement(
+                                    id = step.id,
+                                    note = note,
+                                    text = textStr.ifBlank { null },
+                                    viewId = viewIdStr.ifBlank { null },
+                                    contentDesc = descStr.ifBlank { null },
+                                    className = classNameStr.ifBlank { null },
+                                    index = idx,
+                                    timeoutMs = t,
+                                    onTimeout = onTimeout
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.ImageTap -> {
+                        val th = thresholdStr.trim().toIntOrNull()
+                        val rl = regionLeftStr.trim().toIntOrNull()
+                        val rt = regionTopStr.trim().toIntOrNull()
+                        val rw = regionWidthStr.trim().toIntOrNull()
+                        val rh = regionHeightStr.trim().toIntOrNull()
+                        val ox = offsetXStr.trim().toIntOrNull()
+                        val oy = offsetYStr.trim().toIntOrNull()
+                        val t = timeoutStr.trim().toLongOrNull()
+                        if (templateId.isBlank()) {
+                            error = "请选择识图模板"
+                        } else if (th == null || rl == null || rt == null || rw == null ||
+                            rh == null || ox == null || oy == null || t == null
+                        ) {
+                            error = "请检查阈值、区域与超时等数值"
+                        } else {
+                            onConfirm(
+                                Step.ImageTap(
+                                    id = step.id,
+                                    note = note,
+                                    templateId = templateId,
+                                    thresholdPercent = th,
+                                    regionLeft = rl,
+                                    regionTop = rt,
+                                    regionWidth = rw,
+                                    regionHeight = rh,
+                                    offsetX = ox,
+                                    offsetY = oy,
+                                    timeoutMs = t,
+                                    onTimeout = onTimeout
+                                )
+                            )
+                        }
+                    }
+
+                    is Step.ColorTap -> {
+                        val color = parseColorOrNull(colorStr)
+                        val tol = toleranceStr.trim().toIntOrNull()
+                        val rl = regionLeftStr.trim().toIntOrNull()
+                        val rt = regionTopStr.trim().toIntOrNull()
+                        val rw = regionWidthStr.trim().toIntOrNull()
+                        val rh = regionHeightStr.trim().toIntOrNull()
+                        val ox = offsetXStr.trim().toIntOrNull()
+                        val oy = offsetYStr.trim().toIntOrNull()
+                        val t = timeoutStr.trim().toLongOrNull()
+                        if (color == null) {
+                            error = "颜色格式无效，请使用 #RRGGBB / 0x... / 十进制"
+                        } else if (tol == null || rl == null || rt == null || rw == null ||
+                            rh == null || ox == null || oy == null || t == null
+                        ) {
+                            error = "请检查容差、区域与超时等数值"
+                        } else {
+                            onConfirm(
+                                Step.ColorTap(
+                                    id = step.id,
+                                    note = note,
+                                    color = color,
+                                    tolerance = tol,
+                                    regionLeft = rl,
+                                    regionTop = rt,
+                                    regionWidth = rw,
+                                    regionHeight = rh,
+                                    offsetX = ox,
+                                    offsetY = oy,
+                                    timeoutMs = t,
+                                    onTimeout = onTimeout
+                                )
+                            )
+                        }
+                    }
                 }
             }) {
                 Text("确定")
@@ -770,12 +1408,14 @@ private fun Float.toEditable(): String =
 private fun initialX(step: Step): String = when (step) {
     is Step.Tap -> step.x.toEditable()
     is Step.LongPress -> step.x.toEditable()
+    is Step.Burst -> step.x.toEditable()
     else -> ""
 }
 
 private fun initialY(step: Step): String = when (step) {
     is Step.Tap -> step.y.toEditable()
     is Step.LongPress -> step.y.toEditable()
+    is Step.Burst -> step.y.toEditable()
     else -> ""
 }
 
@@ -809,5 +1449,100 @@ private fun initialDuration(step: Step): String = when (step) {
 private fun initialText(step: Step): String = when (step) {
     is Step.Input -> step.text
     is Step.WaitForElement -> step.text ?: ""
+    is Step.TapElement -> step.text ?: ""
     else -> ""
+}
+
+private fun initialTimeoutMs(step: Step): Long = when (step) {
+    is Step.WaitForElement -> step.timeoutMs
+    is Step.TapElement -> step.timeoutMs
+    is Step.ImageTap -> step.timeoutMs
+    is Step.ColorTap -> step.timeoutMs
+    else -> 10000L
+}
+
+private fun initialOnTimeout(step: Step): OnTimeout = when (step) {
+    is Step.WaitForElement -> step.onTimeout
+    is Step.TapElement -> step.onTimeout
+    is Step.ImageTap -> step.onTimeout
+    is Step.ColorTap -> step.onTimeout
+    else -> OnTimeout.STOP
+}
+
+private fun initialColorText(step: Step): String {
+    val color = (step as? Step.ColorTap)?.color ?: return "#FF0000"
+    return "#%06X".format(Locale.US, color and 0xFFFFFF)
+}
+
+/**
+ * 解析颜色文本，支持 `#RRGGBB` / `#AARRGGBB` / `0x...` / 十进制三种写法。
+ * 解析失败返回 null（不抛异常）。
+ */
+private fun parseColorOrNull(text: String): Int? {
+    val s = text.trim()
+    if (s.isEmpty()) return null
+    return try {
+        when {
+            s.startsWith("#") -> parseHexColor(s.substring(1))
+            s.startsWith("0x", ignoreCase = true) -> parseHexColor(s.substring(2))
+            else -> s.toLongOrNull()?.let { normalizeColor(it) }
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun parseHexColor(hex: String): Int? {
+    if (hex.isEmpty() || hex.length > 8) return null
+    val value = hex.toLongOrNull(16) ?: return null
+    return if (hex.length <= 6) {
+        (0xFF000000L or (value and 0xFFFFFFL)).toInt()
+    } else {
+        value.toInt()
+    }
+}
+
+private fun normalizeColor(raw: Long): Int =
+    if (raw in 0..0xFFFFFFL) (0xFF000000L or raw).toInt() else raw.toInt()
+
+@Composable
+private fun NumberSettingField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    enabled: Boolean = true,
+    onCommit: (String) -> Unit
+) {
+    var hadFocus by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { state ->
+                if (hadFocus && !state.isFocused) onCommit(value)
+                hadFocus = state.isFocused
+            },
+        singleLine = true,
+        enabled = enabled,
+        keyboardOptions = NumberKeyboard,
+        keyboardActions = KeyboardActions(onDone = { onCommit(value) })
+    )
+}
+
+@Composable
+private fun OnTimeoutSelector(onTimeout: OnTimeout, onChange: (OnTimeout) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(
+            selected = onTimeout == OnTimeout.STOP,
+            onClick = { onChange(OnTimeout.STOP) }
+        )
+        Text("超时停止")
+        RadioButton(
+            selected = onTimeout == OnTimeout.SKIP,
+            onClick = { onChange(OnTimeout.SKIP) }
+        )
+        Text("超时跳过")
+    }
 }

@@ -8,6 +8,11 @@ data class Script(
     val name: String,
     val steps: List<Step> = emptyList(),
     val stopOnError: Boolean = true,
+    val loopCount: Int = 1,
+    val loopInfinite: Boolean = false,
+    val loopIntervalMs: Long = 0L,
+    val jitterRadiusPx: Int = 0,
+    val jitterDelayPercent: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

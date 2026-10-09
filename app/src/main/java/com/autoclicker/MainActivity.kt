@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.autoclicker.ui.AppNavHost
+import com.autoclicker.ui.Routes
 import com.autoclicker.ui.theme.AutoClickerTheme
 
 /**
@@ -24,13 +25,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val initialRoute = if (intent.getStringExtra("open_route") == "vision") {
+            Routes.VISION
+        } else {
+            Routes.HOME
+        }
         setContent {
             AutoClickerTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppNavHost()
+                    AppNavHost(startRoute = initialRoute)
                 }
             }
         }

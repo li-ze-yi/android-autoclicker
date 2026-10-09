@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.view.Gravity
@@ -19,10 +20,16 @@ import com.autoclicker.MainActivity
 import com.autoclicker.R
 import com.autoclicker.core.accessibility.AutoAccessService
 import com.autoclicker.core.recorder.ScriptRecorder
+import com.autoclicker.core.runner.RunnerState
 import com.autoclicker.core.runner.ScriptRunner
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
+import com.autoclicker.core.script.Step
+import com.autoclicker.core.script.withNewId
 import com.autoclicker.core.util.PermissionChecker
+import com.autoclicker.core.vision.CapturePermissionActivity
+import com.autoclicker.core.vision.ScreenCaptureService
+import com.autoclicker.core.vision.VisionBridge
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 悬浮窗前台服务：承载悬浮球与控制面板，并驱动脚本执行 / 录制。
@@ -90,6 +98,7 @@ class OverlayService : Service() {
     private var panelView: View? = null
     private var pickView: View? = null
     private var subscribed = false
+    private var editorShowing = false
 
     private val panelCallbacks = object : OverlayUi.PanelCallbacks {
         override fun onStartClick(script: Script?) = startScript(script)
@@ -101,6 +110,12 @@ class OverlayService : Service() {
         override fun onRefreshScripts() = refreshScripts()
         override fun onOpenApp() = openApp()
         override fun onCloseOverlay() = OverlayService.stop(this@OverlayService)
+        override fun onScriptSelected(script: Script?) = refreshSteps(script)
+        override fun onEditStep(script: Script?, index: Int) = editStep(script, index)
+        override fun onMoveStep(script: Script?, index: Int, delta: Int) = moveStep(script, index, delta)
+        override fun onDeleteStep(script: Script?, index: Int) = deleteStep(script, index)
+        override fun onDuplicateStep(script: Script?, index: Int) = duplicateStep(script, index)
+        override fun onCaptureTemplate() = captureTemplate()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -158,14 +173,21 @@ class OverlayService : Service() {
 
     private fun updateStatus() {
         val panel = panelView ?: return
+        val state = ScriptRunner.state.value
         OverlayUi.setStatus(
             panel,
             OverlayUi.formatStatus(
-                ScriptRunner.state.value,
+                state,
                 ScriptRecorder.isRecording.value,
                 ScriptRecorder.stepCount.value
             )
         )
+        val stepIndex = when (state) {
+            is RunnerState.Running -> state.stepIndex
+            is RunnerState.Paused -> state.stepIndex
+            else -> -1
+        }
+        OverlayUi.highlightStep(panel, stepIndex)
     }
 
     // ---- 悬浮球 / 面板 ----
@@ -248,7 +270,7 @@ class OverlayService : Service() {
     private fun showPanel() {
         if (panelView != null) return
         val view = OverlayUi.createPanel(this, panelCallbacks)
-        val width = OverlayUi.dp(this, 240f)
+        val width = OverlayUi.dp(this, 300f)
         val params = WindowManager.LayoutParams(
             width,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -263,7 +285,7 @@ class OverlayService : Service() {
 
         if (!addView(view, params)) return
         panelView = view
-        OverlayUi.setScripts(view, repositoryScripts())
+        refreshScripts()
         updateStatus()
     }
 
@@ -324,6 +346,67 @@ class OverlayService : Service() {
     private fun refreshScripts() {
         val panel = panelView ?: return
         OverlayUi.setScripts(panel, repositoryScripts())
+        refreshSteps(OverlayUi.currentScript(panel))
+    }
+
+    /** 重建步骤列表行，并刷新循环 / 拟人化信息行。 */
+    private fun refreshSteps(script: Script?) {
+        val panel = panelView ?: return
+        if (script != null) OverlayUi.syncSelectedScript(panel, script)
+        OverlayUi.setSteps(panel, script?.steps ?: emptyList())
+        OverlayUi.setScriptInfo(panel, script)
+    }
+
+    private fun editStep(script: Script?, index: Int) {
+        val target = script ?: return
+        val step = target.steps.getOrNull(index) ?: return
+        editorShowing = true
+        OverlayStepEditor.show(this, windowManager, step) { updated ->
+            editorShowing = false
+            applyStepUpdate(target, index, updated)
+        }
+    }
+
+    /** 用编辑后的步骤替换第 [index] 项，保存后重新拉取脚本列表并重建。 */
+    private fun applyStepUpdate(script: Script, index: Int, updated: Step) {
+        if (index !in script.steps.indices) return
+        val steps = script.steps.toMutableList()
+        steps[index] = updated
+        ScriptRepository.get(this).save(script.copy(steps = steps))
+        refreshScripts()
+    }
+
+    private fun moveStep(script: Script?, index: Int, delta: Int) {
+        val target = script ?: return
+        val dest = index + delta
+        if (index !in target.steps.indices || dest !in target.steps.indices) return
+        val steps = target.steps.toMutableList()
+        val tmp = steps[index]
+        steps[index] = steps[dest]
+        steps[dest] = tmp
+        val updated = target.copy(steps = steps)
+        ScriptRepository.get(this).save(updated)
+        refreshSteps(updated)
+    }
+
+    private fun deleteStep(script: Script?, index: Int) {
+        val target = script ?: return
+        if (index !in target.steps.indices) return
+        val steps = target.steps.toMutableList()
+        steps.removeAt(index)
+        val updated = target.copy(steps = steps)
+        ScriptRepository.get(this).save(updated)
+        refreshSteps(updated)
+    }
+
+    private fun duplicateStep(script: Script?, index: Int) {
+        val target = script ?: return
+        val step = target.steps.getOrNull(index) ?: return
+        val steps = target.steps.toMutableList()
+        steps.add(index + 1, step.withNewId())
+        val updated = target.copy(steps = steps)
+        ScriptRepository.get(this).save(updated)
+        refreshSteps(updated)
     }
 
     private fun repositoryScripts(): List<Script> =
@@ -338,6 +421,37 @@ class OverlayService : Service() {
             )
         } catch (e: Exception) {
             // 忽略
+        }
+    }
+
+    /** 截屏并把位图交给识图页框选模板。 */
+    private fun captureTemplate() {
+        if (!ScreenCaptureService.isReady) {
+            toast("尚未授权截屏，正在打开授权页")
+            CapturePermissionActivity.request(this)
+            return
+        }
+        scope.launch {
+            val bitmap: Bitmap? = withContext(Dispatchers.IO) {
+                ScreenCaptureService.capture(0)
+            }
+            if (bitmap == null) {
+                toast("截屏失败")
+                return@launch
+            }
+            VisionBridge.publishCapture(bitmap)
+            toast("已截屏，请在识图页框选区域")
+            try {
+                startActivity(
+                    Intent(this@OverlayService, MainActivity::class.java)
+                        .addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        )
+                        .putExtra("open_route", "vision")
+                )
+            } catch (e: Exception) {
+                // 忽略
+            }
         }
     }
 
@@ -362,6 +476,8 @@ class OverlayService : Service() {
     }
 
     private fun hideAll() {
+        OverlayStepEditor.hide(windowManager)
+        editorShowing = false
         removeView(ballView)
         ballView = null
         ballParams = null

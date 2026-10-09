@@ -11,6 +11,7 @@ import com.autoclicker.ui.editor.EditorScreen
 import com.autoclicker.ui.home.HomeScreen
 import com.autoclicker.ui.permission.PermissionScreen
 import com.autoclicker.ui.scripts.ScriptListScreen
+import com.autoclicker.ui.vision.TemplateScreen
 
 /**
  * 全局路由常量。后续新增页面时在此登记，避免散落的魔法字符串。
@@ -20,6 +21,7 @@ object Routes {
     const val SCRIPTS = "scripts"
     const val EDITOR = "editor/{scriptId}"
     const val PERMISSIONS = "permissions"
+    const val VISION = "vision"
 
     const val ARG_SCRIPT_ID = "scriptId"
 
@@ -27,10 +29,13 @@ object Routes {
 }
 
 @Composable
-fun AppNavHost(navController: NavHostController = rememberNavController()) {
+fun AppNavHost(
+    startRoute: String = Routes.HOME,
+    navController: NavHostController = rememberNavController()
+) {
     NavHost(
         navController = navController,
-        startDestination = Routes.HOME
+        startDestination = startRoute
     ) {
         composable(Routes.HOME) {
             HomeScreen(onNavigate = { route -> navController.navigate(route) })
@@ -56,6 +61,10 @@ fun AppNavHost(navController: NavHostController = rememberNavController()) {
 
         composable(Routes.PERMISSIONS) {
             PermissionScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.VISION) {
+            TemplateScreen(onBack = { navController.popBackStack() })
         }
     }
 }

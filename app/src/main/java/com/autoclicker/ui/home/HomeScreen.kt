@@ -144,6 +144,25 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             Text("脚本库")
         }
 
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onNavigate(Routes.VISION) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("识图模板", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "截屏保存图片模板，供脚本按图定位点击",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
         OutlinedButton(
             onClick = { onNavigate(Routes.PERMISSIONS) },
             modifier = Modifier.fillMaxWidth()

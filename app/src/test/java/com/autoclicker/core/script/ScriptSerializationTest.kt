@@ -25,7 +25,55 @@ class ScriptSerializationTest {
             onTimeout = OnTimeout.SKIP
         ),
         Step.Back(id = "s8", note = "n8"),
-        Step.Home(id = "s9", note = "n9")
+        Step.Home(id = "s9", note = "n9"),
+        Step.Burst(
+            id = "s10",
+            note = "n10",
+            x = 120f,
+            y = 800f,
+            count = 10,
+            intervalMs = 100L,
+            touchDurationMs = 50L
+        ),
+        Step.TapElement(
+            id = "s11",
+            note = "n11",
+            text = "登录",
+            viewId = "com.app:id/login",
+            contentDesc = "登录按钮",
+            className = "android.widget.Button",
+            index = 1,
+            timeoutMs = 10000L,
+            onTimeout = OnTimeout.SKIP
+        ),
+        Step.ImageTap(
+            id = "s12",
+            note = "n12",
+            templateId = "abc123",
+            thresholdPercent = 90,
+            regionLeft = 0,
+            regionTop = 0,
+            regionWidth = 0,
+            regionHeight = 0,
+            offsetX = 5,
+            offsetY = 5,
+            timeoutMs = 8000L,
+            onTimeout = OnTimeout.STOP
+        ),
+        Step.ColorTap(
+            id = "s13",
+            note = "n13",
+            color = 0xFFFF0000.toInt(),
+            tolerance = 25,
+            regionLeft = 10,
+            regionTop = 20,
+            regionWidth = 100,
+            regionHeight = 50,
+            offsetX = 0,
+            offsetY = 0,
+            timeoutMs = 5000L,
+            onTimeout = OnTimeout.SKIP
+        )
     )
 
     @Test
@@ -59,6 +107,10 @@ class ScriptSerializationTest {
         assertTrue(text.contains("\"type\": \"wait_element\""))
         assertTrue(text.contains("\"type\": \"back\""))
         assertTrue(text.contains("\"type\": \"home\""))
+        assertTrue(text.contains("\"type\": \"burst\""))
+        assertTrue(text.contains("\"type\": \"tap_element\""))
+        assertTrue(text.contains("\"type\": \"image_tap\""))
+        assertTrue(text.contains("\"type\": \"color_tap\""))
     }
 
     @Test
@@ -107,5 +159,54 @@ class ScriptSerializationTest {
             assertFalse(step.typeLabel.isEmpty())
             assertFalse(step.describe().isEmpty())
         }
+    }
+
+    @Test
+    fun testNewScriptFieldsRoundTrip() {
+        val original = Script(
+            id = "script-5",
+            name = "新字段",
+            steps = allStepTypes(),
+            stopOnError = true,
+            loopCount = 3,
+            loopInfinite = false,
+            loopIntervalMs = 500L,
+            jitterRadiusPx = 6,
+            jitterDelayPercent = 15,
+            createdAt = 1700000000000L,
+            updatedAt = 1700000001000L
+        )
+
+        val decoded = ScriptSerializer.decode(ScriptSerializer.encode(original))
+
+        assertEquals(original, decoded)
+        assertEquals(3, decoded.loopCount)
+        assertFalse(decoded.loopInfinite)
+        assertEquals(500L, decoded.loopIntervalMs)
+        assertEquals(6, decoded.jitterRadiusPx)
+        assertEquals(15, decoded.jitterDelayPercent)
+    }
+
+    @Test
+    fun testLegacyJsonWithoutNewFields() {
+        val text = """
+            {
+              "id": "script-6",
+              "name": "旧格式",
+              "steps": [],
+              "stopOnError": true,
+              "createdAt": 1,
+              "updatedAt": 2
+            }
+        """.trimIndent()
+
+        val decoded = ScriptSerializer.decode(text)
+
+        assertEquals("script-6", decoded.id)
+        assertEquals(1, decoded.loopCount)
+        assertFalse(decoded.loopInfinite)
+        assertEquals(0L, decoded.loopIntervalMs)
+        assertEquals(0, decoded.jitterRadiusPx)
+        assertEquals(0, decoded.jitterDelayPercent)
     }
 }

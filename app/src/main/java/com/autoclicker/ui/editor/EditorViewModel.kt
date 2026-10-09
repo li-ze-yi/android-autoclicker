@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.autoclicker.core.script.Script
 import com.autoclicker.core.script.ScriptRepository
 import com.autoclicker.core.script.Step
+import com.autoclicker.core.script.newId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,7 +65,55 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         _script.value = _script.value?.copy(stopOnError = value)
     }
 
+    /** 复制指定步骤（生成新 id）并插到其后。 */
+    fun duplicateStep(id: String) {
+        _script.value = _script.value?.let { script ->
+            val index = script.steps.indexOfFirst { it.id == id }
+            if (index < 0) return@let script
+            val steps = script.steps.toMutableList()
+            steps.add(index + 1, steps[index].withNewId())
+            script.copy(steps = steps)
+        }
+    }
+
+    fun updateLoopCount(count: Int) {
+        _script.value = _script.value?.copy(loopCount = count.coerceAtLeast(1))
+    }
+
+    fun updateLoopInfinite(value: Boolean) {
+        _script.value = _script.value?.copy(loopInfinite = value)
+    }
+
+    fun updateLoopIntervalMs(value: Long) {
+        _script.value = _script.value?.copy(loopIntervalMs = value.coerceAtLeast(0L))
+    }
+
+    fun updateJitterRadiusPx(value: Int) {
+        _script.value = _script.value?.copy(jitterRadiusPx = value.coerceAtLeast(0))
+    }
+
+    fun updateJitterDelayPercent(value: Int) {
+        _script.value = _script.value?.copy(jitterDelayPercent = value.coerceIn(0, 50))
+    }
+
     fun save() {
         _script.value?.let { _script.value = repository.save(it) }
     }
+}
+
+/** 生成新 id 的副本（保留其余字段）。 */
+private fun Step.withNewId(): Step = when (this) {
+    is Step.Tap -> copy(id = newId())
+    is Step.LongPress -> copy(id = newId())
+    is Step.Swipe -> copy(id = newId())
+    is Step.Input -> copy(id = newId())
+    is Step.Wait -> copy(id = newId())
+    is Step.LaunchApp -> copy(id = newId())
+    is Step.WaitForElement -> copy(id = newId())
+    is Step.Back -> copy(id = newId())
+    is Step.Home -> copy(id = newId())
+    is Step.Burst -> copy(id = newId())
+    is Step.TapElement -> copy(id = newId())
+    is Step.ImageTap -> copy(id = newId())
+    is Step.ColorTap -> copy(id = newId())
 }
