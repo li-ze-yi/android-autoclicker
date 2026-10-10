@@ -23,12 +23,12 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
-import kotlin.text.Charsets
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
@@ -112,10 +112,10 @@ class ScriptBundle(context: Context) {
 
         // 4) 写 zip
         ZipOutputStream(BufferedOutputStream(output)).use { zip ->
-            writeEntry(zip, "manifest.json", manifestJson.encodeToString(manifest).toByteArray(UTF_8))
-            writeEntry(zip, "script.json", ScriptCodec.encode(script).toByteArray(UTF_8))
+            writeEntry(zip, "manifest.json", manifestJson.encodeToString(manifest).toByteArray(StandardCharsets.UTF_8))
+            writeEntry(zip, "script.json", ScriptCodec.encode(script).toByteArray(StandardCharsets.UTF_8))
             packages.forEach { (id, pkg) ->
-                writeEntry(zip, "packages/$id.json", FunctionPackageCodec.encode(pkg).toByteArray(UTF_8))
+                writeEntry(zip, "packages/$id.json", FunctionPackageCodec.encode(pkg).toByteArray(StandardCharsets.UTF_8))
             }
             templateBytes.forEach { (id, bytes) ->
                 writeEntry(zip, "templates/$id.png", bytes)
@@ -158,7 +158,7 @@ class ScriptBundle(context: Context) {
         // 清单
         val manifestBytes = entries["manifest.json"] ?: fail("缺少清单文件 manifest.json")
         val manifest = try {
-            manifestJson.decodeFromString<BundleManifest>(manifestBytes.toString(UTF_8))
+            manifestJson.decodeFromString<BundleManifest>(manifestBytes.toString(StandardCharsets.UTF_8))
         } catch (e: Exception) {
             fail("清单文件解析失败：${e.message ?: "未知错误"}")
         }
@@ -168,7 +168,7 @@ class ScriptBundle(context: Context) {
 
         // 脚本本体（ScriptCodec.decode 失败会抛中文异常，直接透传）
         val scriptBytes = entries["script.json"] ?: fail("缺少脚本文件 script.json")
-        val script = ScriptCodec.decode(scriptBytes.toString(UTF_8))
+        val script = ScriptCodec.decode(scriptBytes.toString(StandardCharsets.UTF_8))
         if (manifest.scriptId != script.id) {
             fail("清单中的脚本 ID（${manifest.scriptId}）与脚本内容（${script.id}）不一致")
         }
@@ -352,7 +352,7 @@ class ScriptBundle(context: Context) {
     /** 解析函数包 JSON，并校验内容 ID 与文件名一致 */
     private fun decodePackage(bytes: ByteArray, packageId: String): FunctionPackage {
         val pkg = try {
-            FunctionPackageCodec.decode(bytes.toString(UTF_8))
+            FunctionPackageCodec.decode(bytes.toString(StandardCharsets.UTF_8))
         } catch (e: Exception) {
             fail("函数包内容解析失败（$packageId）：${e.message ?: "未知错误"}")
         }
