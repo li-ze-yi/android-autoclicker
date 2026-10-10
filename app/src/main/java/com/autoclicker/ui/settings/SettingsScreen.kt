@@ -1,5 +1,6 @@
 package com.autoclicker.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.autoclicker.data.settings.AppSettings
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.service.overlay.OverlayService
 import com.autoclicker.ui.editor.NumberFieldRow
@@ -81,11 +83,28 @@ fun SettingsScreen(onOpenPermissions: () -> Unit) {
                     Switch(
                         checked = settings.floatingBallEnabled,
                         onCheckedChange = { enabled ->
-                            scope.launch { ServiceLocator.settings.setFloatingBallEnabled(enabled) }
-                            if (enabled) {
+                            if (!enabled) {
+                                scope.launch { ServiceLocator.settings.setFloatingBallEnabled(false) }
+                                runCatching { OverlayService.stop(context) }
+                            } else if (PermissionChecker.isOverlayGranted(context)) {
+                                scope.launch { ServiceLocator.settings.setFloatingBallEnabled(true) }
                                 runCatching { OverlayService.start(context) }
                             } else {
-                                runCatching { OverlayService.stop(context) }
+                                // 缺少悬浮窗权限：回滚开关并跳转授权页。
+                                scope.launch { ServiceLocator.settings.setFloatingBallEnabled(false) }
+                                Toast.makeText(
+                                    context,
+                                    "请先开启悬浮窗权限，已为你打开设置页",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                runCatching {
+                                    context.startActivity(
+                                        PermissionChecker.settingsIntent(
+                                            context,
+                                            PermissionChecker.Kind.OVERLAY,
+                                        ),
+                                    )
+                                }
                             }
                         },
                     )

@@ -142,7 +142,7 @@ fun HomeScreen(
         pendingBallScript = null
         if (script != null) {
             handleBallResult(
-                RecordFlow.bindAndShowBall(ServiceLocator.context, script, requireAccessibility = false),
+                RecordFlow.bindAndShowBall(ServiceLocator.context, script),
                 script,
             )
         }
@@ -278,7 +278,6 @@ fun HomeScreen(
                                 RecordFlow.bindAndShowBall(
                                     ServiceLocator.context,
                                     script,
-                                    requireAccessibility = false,
                                 ),
                                 script,
                             )

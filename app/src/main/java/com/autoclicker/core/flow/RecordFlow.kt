@@ -32,7 +32,7 @@ object RecordFlow {
     suspend fun createTaskAndRecord(context: Context, name: String): StartResult {
         val script = Script(id = Ids.newId(), name = name.trim().ifBlank { "录制任务" })
         return runCatching {
-            val bound = bindAndShowBall(context, script, requireAccessibility = true)
+            val bound = bindAndShowBall(context, script)
             if (bound !is StartResult.Started) return@runCatching bound
             Recorder.start(context)
             RuntimeBus.log("已开始录制到任务「${script.name}」，悬浮球已弹出")
@@ -45,7 +45,7 @@ object RecordFlow {
 
     /** 绑定已有任务并开始录制。 */
     suspend fun bindAndRecord(context: Context, script: Script): StartResult {
-        val bound = bindAndShowBall(context, script, requireAccessibility = true)
+        val bound = bindAndShowBall(context, script)
         if (bound !is StartResult.Started) return bound
         Recorder.start(context)
         RuntimeBus.log("已开始录制到任务「${script.name}」，悬浮球已弹出")
@@ -55,18 +55,15 @@ object RecordFlow {
     /**
      * 绑定任务 + 弹出悬浮球（不自动开始录制）。
      * 用于「新建任务成功后自动弹出悬浮球」。
+     *
+     * 弹球前必须 **无障碍 + 悬浮窗** 权限齐备，缺哪个就返回 [StartResult.NeedPermission]
+     * 由 UI 跳转到对应设置页，绝不带缺失权限硬弹球。
      */
     suspend fun bindAndShowBall(
         context: Context,
         script: Script,
-        requireAccessibility: Boolean,
     ): StartResult {
-        val missing = if (requireAccessibility) {
-            PermissionChecker.firstMissing(context)
-        } else {
-            // 仅弹悬浮球只需悬浮窗权限。
-            if (PermissionChecker.isOverlayGranted(context)) null else PermissionChecker.Kind.OVERLAY
-        }
+        val missing = PermissionChecker.firstMissing(context)
         if (missing != null) return StartResult.NeedPermission(missing)
 
         runCatching { ServiceLocator.scripts.save(script) }

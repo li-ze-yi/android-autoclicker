@@ -152,9 +152,9 @@ class PreciseCaptureOverlay(
             },
         )
 
-        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         originalFlags = flags
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
