@@ -85,12 +85,12 @@ class ActionExecutor(
         return when (action) {
             is ClickAction -> {
                 clickPercent(action.point, action.durationMs)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is LongPressAction -> {
                 clickPercent(action.point, action.durationMs)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is RepeatClickAction -> {
@@ -101,14 +101,14 @@ class ActionExecutor(
                     i++
                     if (i < total) gate.delay(action.intervalMs.coerceAtLeast(0))
                 }
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is AreaRandomClickAction -> {
                 val currentMapper = mapper()
                 val point = currentMapper.randomPointIn(currentMapper.toPixel(action.rect))
                 clickPixel(point.x, point.y, action.durationMs)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is GestureAction -> {
@@ -123,23 +123,23 @@ class ActionExecutor(
                 val executor = Platform.gesture()
                 if (executor == null || !executor.isReady()) {
                     RuntimeBus.log(LogLevel.WARN, "手势能力不可用，无法执行手势")
-                } else {
-                    executor.perform(strokes)
+                    return StepOutcome(success = false)
                 }
-                StepOutcome()
+                executor.perform(strokes)
+                StepOutcome(success = true)
             }
 
             is SwipeAction -> {
                 val executor = Platform.gesture()
                 if (executor == null || !executor.isReady()) {
                     RuntimeBus.log(LogLevel.WARN, "手势能力不可用，无法滑动")
-                } else {
-                    val currentMapper = mapper()
-                    val from = currentMapper.toPixel(action.from)
-                    val to = currentMapper.toPixel(action.to)
-                    executor.swipe(from.x, from.y, to.x, to.y, action.durationMs)
+                    return StepOutcome(success = false)
                 }
-                StepOutcome()
+                val currentMapper = mapper()
+                val from = currentMapper.toPixel(action.from)
+                val to = currentMapper.toPixel(action.to)
+                executor.swipe(from.x, from.y, to.x, to.y, action.durationMs)
+                StepOutcome(success = true)
             }
 
             is ClickImageAction -> clickImage(action)
@@ -152,42 +152,42 @@ class ActionExecutor(
 
             is GlobalKeyAction -> {
                 execGlobalKey(action)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is OpenAppAction -> {
                 val global = Platform.global()
                 if (global == null) {
                     RuntimeBus.log(LogLevel.WARN, "全局操作不可用，无法打开应用：${action.packageName}")
-                } else {
-                    global.openApp(action.packageName, action.activity)
+                    return StepOutcome(success = false)
                 }
-                StepOutcome()
+                global.openApp(action.packageName, action.activity)
+                StepOutcome(success = true)
             }
 
             is CloseAppAction -> {
                 val global = Platform.global()
                 if (global == null) {
                     RuntimeBus.log(LogLevel.WARN, "全局操作不可用，无法关闭应用：${action.packageName}")
-                } else {
-                    global.closeApp(action.packageName)
+                    return StepOutcome(success = false)
                 }
-                StepOutcome()
+                global.closeApp(action.packageName)
+                StepOutcome(success = true)
             }
 
             is InputTextAction -> {
                 inputText(action, ctx)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is ExtractContentAction -> {
                 extractContent(action, ctx)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is VariableOpAction -> {
                 applyVariableOp(action, ctx)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is ConditionAction -> {
@@ -202,35 +202,35 @@ class ActionExecutor(
 
             is CallFunctionAction -> {
                 invokeFunction(action, ctx)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is DelayAction -> {
                 gate.delay(action.ms + randomExtra(action.randomMs))
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
-            is EmptyAction -> StepOutcome()
+            is EmptyAction -> StepOutcome(success = true)
 
             is ToastAction -> {
                 showToast(action.message)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is PopupAction -> {
                 RuntimeBus.log(LogLevel.WARN, "弹窗以 Toast 兜底：${action.title}")
                 showToast("${action.title}：${action.message}")
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             is SpeakAction -> {
                 speak(action.message)
-                StepOutcome()
+                StepOutcome(success = true)
             }
 
             else -> {
                 RuntimeBus.log(LogLevel.WARN, "暂不支持的动类型：${action::class.simpleName}")
-                StepOutcome()
+                StepOutcome(success = false)
             }
         }
     }

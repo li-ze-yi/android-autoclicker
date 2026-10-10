@@ -73,6 +73,7 @@ import com.autoclicker.domain.model.TextGroup
 import com.autoclicker.domain.model.flattenSteps
 import com.autoclicker.domain.rule.StructureValidator
 import com.autoclicker.domain.rule.ValidationIssue
+import com.autoclicker.domain.rule.hasOutcomeBranch
 import com.autoclicker.ui.EditorAction
 import kotlinx.coroutines.launch
 
@@ -893,14 +894,25 @@ private fun StepConfigDialog(
                 BoolFieldRow("启用", enabled) { enabled = it }
                 // 跳转目标包含本步骤自身（选自己 = 成功/失败后重新执行本步骤，可做识别重试循环）。
                 val options = listOf<Pair<String?, String>>(null to "（继续下一步）") +
-                    allSteps.map {
-                        it.id to (
-                            (if (it.id == step.id) "本步骤自身 · " else "") +
-                                "${it.id.take(6)} · ${actionSummary(it.action)}"
+                    allSteps.mapIndexed { index, node ->
+                        node.id to (
+                            "第${index + 1}步" +
+                                (if (node.id == step.id) "（本步骤）" else "") +
+                                " · " + actionSummary(node.action)
                             )
                     }
                 ChoiceField("成功跳转", success, options) { success = it }
                 ChoiceField("失败跳转", failure, options) { failure = it }
+                Text(
+                    if (step.action.hasOutcomeBranch()) {
+                        "识别类动作按「是否找到目标」判定成功/失败，条件判断按条件真假判定。"
+                    } else {
+                        "该动作没有识别结果，执行完成即算成功（走「成功跳转」）；"
+                            + "只有动作本身失败（如手势/全局能力不可用）才走「失败跳转」。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {

@@ -5,7 +5,12 @@ import kotlin.random.Random
 
 /** 单步执行结果。 */
 data class StepOutcome(
-    /** true=成功 / false=失败 / null=无结果（非识别/条件类动作）。供 [BranchIns] 使用。 */
+    /**
+     * true=成功 / false=失败 / null=无结果（已禁用步骤、纯跳转动作）。
+     *
+     * 识别类动作按「是否找到」，条件判断按条件真假，其余动作执行完成即视为成功。
+     * 供 [BranchIns] 使用。
+     */
     val success: Boolean? = null,
     /** 主动跳转的目标步骤 id（JumpAction.STEP）。 */
     val jumpTargetStepId: String? = null,
