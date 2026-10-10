@@ -77,7 +77,13 @@ fun AppNavigation() {
                 )
             }
             composable(Routes.SCRIPTS) {
-                Placeholder("脚本库")
+                com.autoclicker.ui.scripts.ScriptsScreen(
+                    onOpenScript = { id ->
+                        navController.navigate(Routes.scriptEditor(id)) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
             }
             composable(Routes.PACKAGES) {
                 com.autoclicker.ui.packages.PackagesScreen()
@@ -90,6 +96,20 @@ fun AppNavigation() {
                     onFinished = {
                         navController.popBackStack(Routes.HOME, inclusive = false)
                     },
+                )
+            }
+
+            composable(
+                route = Routes.SCRIPT_EDITOR,
+                arguments = listOf(
+                    androidx.navigation.navArgument("scriptId") {
+                        type = androidx.navigation.NavType.StringType
+                    }
+                ),
+            ) { entry ->
+                com.autoclicker.ui.scripts.ScriptEditorScreen(
+                    scriptId = entry.arguments?.getString("scriptId").orEmpty(),
+                    onBack = { navController.popBackStack() },
                 )
             }
         }

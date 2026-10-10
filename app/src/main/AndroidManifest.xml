@@ -54,6 +54,12 @@
         <service
             android:name=".service.overlay.OverlayService"
             android:exported="false" />
+
+        <!-- 屏幕采集服务：MediaProjection 单次会话（FR-7，Android 14+ 必须声明 mediaProjection 类型） -->
+        <service
+            android:name=".service.capture.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 
 </manifest>

@@ -259,6 +259,8 @@ object StructureValidator {
                 }
                 action.region?.let { validateRectInto(it, reasons, "$location 找图区域") }
             }
+
+            Action.GlobalHome, Action.GlobalBack -> Unit
         }
     }
 
