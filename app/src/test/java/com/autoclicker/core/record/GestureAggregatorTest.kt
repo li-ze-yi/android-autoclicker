@@ -71,7 +71,7 @@ class GestureAggregatorTest {
         r.begin(RecordMode.Precise)
         r.recordGesture(RecordedGesture.Tap(1, 1), 100)
         r.recordGesture(RecordedGesture.Tap(2, 2), 200)
-        assertEquals(2, r.steps.value)
+        assertEquals(2, r.steps.value.size)
     }
 
     @Test
