@@ -48,7 +48,7 @@ class OverlayService : Service() {
 
         // 主线程作用域：onDestroy 统一取消
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        controller = DefaultOverlayController(app.bus, app.targetController, scope)
+        controller = app.overlayController
 
         // 目标控件管理器（先创建，连线层位于悬浮球之下）
         manager = TargetOverlayManager(this, wm, app.targetController, scope) {

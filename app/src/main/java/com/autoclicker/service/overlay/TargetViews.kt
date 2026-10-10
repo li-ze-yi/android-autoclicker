@@ -202,8 +202,8 @@ abstract class DragTouchListener(
  */
 class TapTargetView(context: Context) : View(context) {
 
-    /** 是否选中 */
-    var selected: Boolean = false
+    /** 是否选中（命名避开 View.setSelected 的 JVM 签名冲突） */
+    var chosen: Boolean = false
         set(value) {
             field = value
             invalidate()
@@ -232,10 +232,10 @@ class TapTargetView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        val strokeW = if (selected) dp(3f) else dp(1.5f)
+        val strokeW = if (chosen) dp(3f) else dp(1.5f)
         strokePaint.strokeWidth = strokeW
         val r = width / 2f - strokeW / 2 - dp(1f)
-        if (selected) {
+        if (chosen) {
             canvas.drawCircle(cx, cy, r + dp(6f), haloPaint)
         }
         canvas.drawCircle(cx, cy, r, fillPaint)
@@ -252,8 +252,8 @@ class SwipePointView(
     private val label: String,
 ) : View(context) {
 
-    /** 是否选中 */
-    var selected: Boolean = false
+    /** 是否选中（命名避开 View.setSelected） */
+    var chosen: Boolean = false
         set(value) {
             field = value
             invalidate()
@@ -288,7 +288,7 @@ class SwipePointView(
         val strokeW = dp(2f)
         strokePaint.strokeWidth = strokeW
         val r = width / 2f - strokeW / 2 - dp(1f)
-        if (selected) {
+        if (chosen) {
             canvas.drawCircle(cx, cy, r + dp(6f), haloPaint)
         }
         canvas.drawCircle(cx, cy, r, fillPaint)
@@ -542,8 +542,8 @@ class TargetOverlayManager(
         entry.selected = value
         entry.targetViews.forEach { v ->
             when (v) {
-                is TapTargetView -> v.selected = value
-                is SwipePointView -> v.selected = value
+                is TapTargetView -> v.chosen = value
+                is SwipePointView -> v.chosen = value
             }
         }
     }
