@@ -75,9 +75,42 @@ class Recorder {
         _steps.value = newSteps
     }
 
+    /**
+     * 直接录入一个动作（手动添加 Home/返回等系统键时使用）。
+     * 同样遵循自动延时插入规则。
+     */
+    fun recordRawAction(action: Action, timeMs: Long) {
+        val newSteps = mutableListOf<ScriptStep>()
+        newSteps += _steps.value
+
+        if (autoInterval && lastGestureTimeMs != 0L && newSteps.isNotEmpty()) {
+            val gap = (timeMs - lastGestureTimeMs).coerceAtLeast(0L)
+            if (gap > 0) {
+                newSteps += ScriptStep.BasicStep(nextId(), Action.Delay(gap))
+            }
+        }
+        newSteps += ScriptStep.BasicStep(nextId(), action)
+        lastGestureTimeMs = timeMs
+        _steps.value = newSteps
+    }
+
     /** 删除一条步骤（时间轴单选删除） */
     fun removeStep(stepId: String) {
         _steps.value = _steps.value.filterNot { it.id == stepId }
+    }
+
+    /**
+     * 更新一条基础步骤的动作（如修改延时时长）。
+     * 仅 BasicStep 可更新；找不到步骤抛 IllegalArgumentException。
+     */
+    fun updateStep(stepId: String, newAction: Action) {
+        _steps.value = _steps.value.map { step ->
+            when {
+                step.id != stepId -> step
+                step is ScriptStep.BasicStep -> step.copy(action = newAction)
+                else -> throw IllegalArgumentException("该步骤不支持编辑参数")
+            }
+        }
     }
 
     /** 结束录制（步骤保留，供保存/回放） */

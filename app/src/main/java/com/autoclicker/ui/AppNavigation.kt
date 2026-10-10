@@ -63,20 +63,34 @@ fun AppNavigation() {
                 .padding(padding),
         ) {
             composable(Routes.HOME) {
-                HomeScreen(onNavigateToPermissions = {
-                    navController.navigate(Routes.PERMISSIONS) {
-                        launchSingleTop = true
-                    }
-                })
+                HomeScreen(
+                    onNavigateToPermissions = {
+                        navController.navigate(Routes.PERMISSIONS) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onNavigateToRecording = {
+                        navController.navigate(Routes.RECORD) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
             }
             composable(Routes.SCRIPTS) {
                 Placeholder("脚本库")
             }
             composable(Routes.PACKAGES) {
-                Placeholder("函数包")
+                com.autoclicker.ui.packages.PackagesScreen()
             }
             composable(Routes.PERMISSIONS) {
                 PermissionScreen()
+            }
+            composable(Routes.RECORD) {
+                com.autoclicker.ui.record.RecordingScreen(
+                    onFinished = {
+                        navController.popBackStack(Routes.HOME, inclusive = false)
+                    },
+                )
             }
         }
     }

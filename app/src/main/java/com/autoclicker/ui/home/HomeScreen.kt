@@ -45,6 +45,7 @@ import androidx.compose.material3.MaterialTheme.colorScheme
 @Composable
 fun HomeScreen(
     onNavigateToPermissions: () -> Unit,
+    onNavigateToRecording: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -143,6 +144,47 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+        }
+
+        // 录制入口
+        RecordEntry(
+            enabled = state.permissionsReady && !state.busy,
+            onStart = { mode ->
+                app.coordinator.beginRecording(mode)
+                onNavigateToRecording()
+            },
+        )
+    }
+}
+
+/** 录制入口卡片：选择普通/精确模式并开始录制 */
+@Composable
+private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.RecordMode) -> Unit) {
+    var mode by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(com.autoclicker.core.bus.RecordMode.Precise)
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("录制操作", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.RadioButton(
+                    selected = mode == com.autoclicker.core.bus.RecordMode.Precise,
+                    onClick = { mode = com.autoclicker.core.bus.RecordMode.Precise },
+                )
+                Text("精确模式（录点击与滑动，坐标准）", Modifier.padding(start = 4.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.RadioButton(
+                    selected = mode == com.autoclicker.core.bus.RecordMode.Normal,
+                    onClick = { mode = com.autoclicker.core.bus.RecordMode.Normal },
+                )
+                Text("普通模式（仅点击，零遮挡）", Modifier.padding(start = 4.dp))
+            }
+            OutlinedButton(
+                onClick = { onStart(mode) },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("开始录制") }
         }
     }
 }

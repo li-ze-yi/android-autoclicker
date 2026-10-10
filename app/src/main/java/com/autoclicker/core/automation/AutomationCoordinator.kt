@@ -28,6 +28,7 @@ class AutomationCoordinator(private val app: MyApplication) {
     private val player = ScriptPlayer(
         gestureExecutor = gestureExecutor,
         packageResolver = packageResolver,
+        globalActions = com.autoclicker.service.accessibility.AndroidGlobalActions(),
     )
 
     /** 当前回放 Job（用于停止时立即取消） */
@@ -111,6 +112,28 @@ class AutomationCoordinator(private val app: MyApplication) {
     fun stopRecording() {
         app.recorder.end()
         scope.launch { runCatching { app.bus.stopRecording() } }
+    }
+
+    /**
+     * 直接运行一个完整脚本（录制后"保存并运行"、脚本列表运行入口）。
+     * @return true 已启动
+     */
+    fun startScript(script: com.autoclicker.domain.model.Script): Boolean {
+        playbackControl.resume()
+        playbackJob = scope.launch {
+            try {
+                app.bus.start(script.id)
+                player.play(script, playbackControl)
+            } catch (e: PlaybackException) {
+                app.bus.publishEvent(e.message ?: "执行失败")
+            } finally {
+                playbackControl.resume()
+                if (app.bus.engineState.value != com.autoclicker.core.bus.EngineState.Idle) {
+                    runCatching { app.bus.stop() }
+                }
+            }
+        }
+        return true
     }
 
     private companion object {

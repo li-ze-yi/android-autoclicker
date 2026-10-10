@@ -87,4 +87,14 @@ sealed interface Action {
         /** 默认相似度阈值 */
         const val DEFAULT_SIMILARITY: Double = 0.8
     }
+
+    /** 按下 Home 键（手动添加的系统键，录制器入口） */
+    @Serializable
+    @SerialName("GlobalHome")
+    data object GlobalHome : Action
+
+    /** 按下返回键（手动添加的系统键） */
+    @Serializable
+    @SerialName("GlobalBack")
+    data object GlobalBack : Action
 }

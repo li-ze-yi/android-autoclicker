@@ -27,6 +27,7 @@ class ScriptPlayer(
     private val packageResolver: PackageResolver,
     private val imageWaiter: ImageWaiter? = null,
     private val clock: Clock = SystemClock,
+    private val globalActions: GlobalActions? = null,
 ) {
 
     /**
@@ -172,6 +173,18 @@ class ScriptPlayer(
             is Action.Delay -> {
                 if (action.durationMs < 0) throw PlaybackException("延时时长不能为负")
                 delay(action.durationMs)
+            }
+
+            Action.GlobalHome -> {
+                val done = globalActions?.goHome()
+                    ?: throw PlaybackException("系统按键功能尚未就绪")
+                if (!done) throw PlaybackException("Home 键执行失败（无障碍服务可能未连接）")
+            }
+
+            Action.GlobalBack -> {
+                val done = globalActions?.goBack()
+                    ?: throw PlaybackException("系统按键功能尚未就绪")
+                if (!done) throw PlaybackException("返回键执行失败（无障碍服务可能未连接）")
             }
 
             is Action.WaitImage -> {
