@@ -107,6 +107,10 @@ object OverlayStepEditor {
     /** 「添加动作」的目标步骤组 id；null 表示追加到顶层。 */
     private var actionTargetGroupId: String? = null
 
+    /** 「移入已有动作」的目标步骤组 id 与勾选结果。 */
+    private var moveInGroupId: String? = null
+    private val moveInSelection = mutableSetOf<String>()
+
     fun isOpen(): Boolean = active
 
     // ---------------- 窗口 ----------------
@@ -374,6 +378,7 @@ object OverlayStepEditor {
             actionTargetGroupId = group.id
             showAddActionPicker()
         })
+        groupOps.addView(smallButton("移入已有动作") { showMoveInPicker(group.id) })
         groupOps.addView(smallButton("移出全部(${group.children.size})") {
             RecordingSession.moveChildrenOutOfGroup(group.id)
             render()
@@ -580,6 +585,78 @@ object OverlayStepEditor {
         } else {
             RecordingSession.addNode(step)
         }
+    }
+
+    // ---------------- 移入已有动作 ----------------
+
+    private fun showMoveInPicker(groupId: String) {
+        moveInGroupId = groupId
+        moveInSelection.clear()
+        renderMoveInPicker()
+    }
+
+    /** 勾选顶层已有步骤，收进指定步骤组。 */
+    private fun renderMoveInPicker() {
+        val panel = root ?: return
+        val context = appContext ?: return
+        val groupId = moveInGroupId ?: return
+        val group = RecordingSession.nodes.value
+            .firstOrNull { it is GroupNode && it.id == groupId } as? GroupNode
+        val groupName = group?.name?.ifBlank { "步骤组" } ?: "步骤组"
+        panel.removeAllViews()
+        panel.addView(buildHeader(context))
+        val body = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(content)
+        panel.addView(body)
+
+        val candidates = RecordingSession.nodes.value.filterIsInstance<StepNode>()
+        content.addView(hintText("勾选要收进【$groupName】的已有动作（可多选）："))
+        if (candidates.isEmpty()) {
+            content.addView(hintText("顶层暂无可移入的动作；组内步骤可点「完整编辑」调整"))
+        }
+        candidates.forEach { step ->
+            content.addView(
+                CheckBox(context).apply {
+                    text = actionSummary(step.action)
+                    setTextColor(Color.WHITE)
+                    textSize = 12f
+                    isChecked = step.id in moveInSelection
+                    setOnCheckedChangeListener { _, checked ->
+                        if (checked) moveInSelection.add(step.id) else moveInSelection.remove(step.id)
+                    }
+                },
+            )
+        }
+
+        val footer = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        footer.addView(smallButton("确认移入") {
+            val nodes = RecordingSession.nodes.value
+            val moving = nodes.filterIsInstance<StepNode>().filter { it.id in moveInSelection }
+            if (moving.isEmpty()) {
+                Toast.makeText(appContext, "请先勾选要移入的动作", Toast.LENGTH_SHORT).show()
+                return@smallButton
+            }
+            val rest = nodes.filterNot { it is StepNode && it.id in moveInSelection }
+            val updated = rest.map { node ->
+                if (node is GroupNode && node.id == groupId) {
+                    node.copy(children = node.children + moving)
+                } else {
+                    node
+                }
+            }
+            RecordingSession.replaceNodes(updated)
+            RuntimeBus.log("步骤组「$groupName」移入 ${moving.size} 个动作")
+            mode = Mode.LIST
+            render()
+        })
+        footer.addView(smallButton("取消") {
+            mode = Mode.LIST
+            render()
+        })
+        panel.addView(footer)
     }
 
     /** 编辑器自身的协程域：用于异步加载模板 / 函数包列表（object 常驻，任务短，结束后自然回收）。 */

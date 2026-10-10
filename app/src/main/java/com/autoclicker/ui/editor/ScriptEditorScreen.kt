@@ -110,6 +110,9 @@ fun ScriptEditorScreen(
     var groupLoop by remember { mutableStateOf("1") }
     // 新建步骤组时勾选要并入该组的顶层步骤 id
     var groupSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // 往已有步骤组里移入已有动作：目标组 id + 勾选的顶层步骤 id
+    var moveInGroupId by remember { mutableStateOf<String?>(null) }
+    var moveInSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
     var renameDialogOpen by remember { mutableStateOf(false) }
     var renameName by remember { mutableStateOf("") }
     var addParentId by remember { mutableStateOf<String?>(null) }
@@ -372,6 +375,10 @@ fun ScriptEditorScreen(
                                         pickerCategory = null
                                         pickerOpen = true
                                     },
+                                    onMoveIn = {
+                                        moveInGroupId = node.id
+                                        moveInSelection = emptySet()
+                                    },
                                     onRename = {
                                         groupEditId = node.id
                                         groupName = node.name
@@ -609,6 +616,87 @@ fun ScriptEditorScreen(
         )
     }
 
+    // 往已有步骤组移入已配置好的动作（勾选顶层步骤后收进组内）
+    moveInGroupId?.let { targetGroupId ->
+        val s = script
+        val candidates = s?.nodes?.filterIsInstance<StepNode>().orEmpty()
+        val groupName = s?.nodes?.firstOrNull { it is GroupNode && it.id == targetGroupId }
+            ?.let { (it as GroupNode).name.ifBlank { "步骤组" } } ?: "步骤组"
+        AlertDialog(
+            onDismissRequest = { moveInGroupId = null; moveInSelection = emptySet() },
+            title = { Text("移入到「$groupName」") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    if (candidates.isEmpty()) {
+                        Text("顶层暂无可移入的动作，请先添加动作")
+                    } else {
+                        Text(
+                            "勾选要收进该步骤组的已有动作（可多选）",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        candidates.forEach { node ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = node.id in moveInSelection,
+                                    onCheckedChange = { checked ->
+                                        moveInSelection = if (checked) {
+                                            moveInSelection + node.id
+                                        } else {
+                                            moveInSelection - node.id
+                                        }
+                                    },
+                                )
+                                Text(
+                                    text = actionSummary(node.action),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (s == null || moveInSelection.isEmpty()) {
+                            moveInGroupId = null
+                            moveInSelection = emptySet()
+                        } else {
+                            val ids = moveInSelection
+                            val moving = s.nodes.filterIsInstance<StepNode>().filter { it.id in ids }
+                            val rest = s.nodes.filterNot { it is StepNode && it.id in ids }
+                            val newNodes = rest.map { n ->
+                                if (n is GroupNode && n.id == targetGroupId) {
+                                    n.copy(children = n.children + moving)
+                                } else {
+                                    n
+                                }
+                            }
+                            persist(s.copy(nodes = newNodes, updatedAt = System.currentTimeMillis()))
+                            moveInGroupId = null
+                            moveInSelection = emptySet()
+                        }
+                    },
+                ) { Text("移入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { moveInGroupId = null; moveInSelection = emptySet() }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
     // 重命名任务（悬浮球控制台的「重命名」入口也会直达这里）
     if (renameDialogOpen) {
         AlertDialog(
@@ -731,6 +819,7 @@ private fun GroupCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     onAddChild: () -> Unit,
+    onMoveIn: () -> Unit,
     onRename: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
@@ -756,6 +845,7 @@ private fun GroupCard(
                 IconButton(onClick = onAddChild, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Add, contentDescription = "组内添加")
                 }
+                TextButton(onClick = onMoveIn) { Text("移入动作") }
                 IconButton(onClick = onRename, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "编辑组")
                 }
