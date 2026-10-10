@@ -382,7 +382,9 @@ object OverlayStepEditor {
         if (group.children.isNotEmpty()) {
             column.addView(
                 hintText(
-                    "组内：" + group.children.joinToString("、") { actionSummary(it.action) },
+                    "组内：" + group.children.joinToString("、") { child ->
+                        if (child is StepNode) actionSummary(child.action) else "[步骤组]"
+                    },
                 ),
             )
         }
