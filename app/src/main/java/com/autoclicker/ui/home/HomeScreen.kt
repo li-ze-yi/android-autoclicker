@@ -148,7 +148,8 @@ fun HomeScreen(
         }
     }
 
-    // 运行任务：无障碍不可用时自动跳转设置页，返回后自动重试（最多连续跳转 2 次）。
+    // 运行任务：不直接播放，而是绑定任务并弹出悬浮球，开始/暂停/停止交由使用者自己控制。
+    // 权限不齐时自动跳设置页，返回后自动重试（最多连续跳转 2 次）。
     var pendingRunScript by remember { mutableStateOf<Script?>(null) }
     var runRedirectCount by remember { mutableStateOf(0) }
     var runRetryTick by remember { mutableStateOf(0) }
@@ -159,28 +160,30 @@ fun HomeScreen(
         runRetryTick++
     }
 
-    /** 真正启动播放；缺无障碍时先跳设置页再自动重试，避免「点了没反应」。 */
-    val startRun: (Script) -> Unit = { script ->
-        if (PermissionChecker.isAccessibilityEnabled(context)) {
-            runRedirectCount = 0
-            scope.launch {
-                val player = ServiceLocator.player
-                if (player == null) {
-                    toast("运行引擎未就绪")
-                } else {
-                    runCatching { player.play(script) }
-                        .onFailure { toast("运行失败：${it.message}") }
+    /** 绑定任务并弹出悬浮球（不自动播放）；缺权限时跳设置页并自动重试。 */
+    val showBallForRun: (Script) -> Unit = { script ->
+        scope.launch {
+            when (val result = RecordFlow.bindAndShowBall(ServiceLocator.context, script)) {
+                is RecordFlow.StartResult.Started -> {
+                    runRedirectCount = 0
+                    toast("已绑定「${script.name}」，悬浮球已弹出，可在悬浮球里开始/暂停/停止")
                 }
+
+                is RecordFlow.StartResult.NeedPermission -> {
+                    if (runRedirectCount >= 2) {
+                        toast("仍缺少「${PermissionChecker.kindLabel(result.kind)}」，请手动开启后再试")
+                    } else {
+                        runRedirectCount++
+                        pendingRunScript = script
+                        toast("请先开启${PermissionChecker.kindLabel(result.kind)}，已为你打开设置页")
+                        runPermissionLauncher.launch(
+                            PermissionChecker.settingsIntent(context, result.kind),
+                        )
+                    }
+                }
+
+                is RecordFlow.StartResult.Failed -> toast("悬浮球弹出失败：${result.message}")
             }
-        } else if (runRedirectCount >= 2) {
-            toast("仍缺少「无障碍服务」，请手动开启后再试")
-        } else {
-            runRedirectCount++
-            pendingRunScript = script
-            toast("请先开启无障碍服务，已为你打开设置页")
-            runPermissionLauncher.launch(
-                PermissionChecker.settingsIntent(context, PermissionChecker.Kind.ACCESSIBILITY),
-            )
         }
     }
 
@@ -188,7 +191,7 @@ fun HomeScreen(
         if (runRetryTick == 0) return@LaunchedEffect
         val script = pendingRunScript
         pendingRunScript = null
-        if (script != null) startRun(script)
+        if (script != null) showBallForRun(script)
     }
 
     Scaffold(
@@ -254,7 +257,7 @@ fun HomeScreen(
                         ScriptCard(
                             script = script,
                             onOpen = { onOpenScript(script.id) },
-                            onRun = { startRun(script) },
+                            onRun = { showBallForRun(script) },
                             onRename = {
                                 renameTarget = script
                                 renameText = script.name

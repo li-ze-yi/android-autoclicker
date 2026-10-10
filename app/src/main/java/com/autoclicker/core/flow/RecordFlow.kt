@@ -53,8 +53,9 @@ object RecordFlow {
     }
 
     /**
-     * 绑定任务 + 弹出悬浮球（不自动开始录制）。
-     * 用于「新建任务成功后自动弹出悬浮球」。
+     * 绑定任务 + 弹出悬浮球（不自动开始运行/录制）。
+     * 首页「运行」入口与「新建任务成功后自动弹出悬浮球」都走这里：
+     * 弹出后由使用者在悬浮球里自行开始 / 暂停 / 停止。
      *
      * 弹球前必须 **无障碍 + 悬浮窗** 权限齐备，缺哪个就返回 [StartResult.NeedPermission]
      * 由 UI 跳转到对应设置页，绝不带缺失权限硬弹球。
@@ -68,7 +69,8 @@ object RecordFlow {
 
         runCatching { ServiceLocator.scripts.save(script) }
         RecordingSession.begin(script)
-        OverlayService.start(context)
+        // 把该任务带给悬浮球作为当前选中，长按悬浮球即运行它。
+        OverlayService.start(context, script.id)
         RuntimeBus.log("悬浮球已弹出并绑定任务「${script.name}」")
         return StartResult.Started(script)
     }

@@ -84,6 +84,9 @@ class OverlayService : Service() {
     private var scripts: List<Script> = emptyList()
     private var selectedScript: Script? = null
 
+    /** 首页「运行」入口带过来的目标任务 id，任务列表首次加载时优先选中它。 */
+    private var pendingScriptId: String? = null
+
     private var logsJob: Job? = null
     private var stateJob: Job? = null
     private var stepJob: Job? = null
@@ -133,7 +136,10 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.getStringExtra(EXTRA_SCRIPT_ID)?.let { pendingScriptId = it }
         showFloatingBall()
+        // 带目标任务启动（首页「运行」入口）时先把该任务设为当前选中，长按悬浮球才会跑这个任务。
+        if (pendingScriptId != null || consoleView != null) loadScripts()
         return START_STICKY
     }
 
@@ -593,7 +599,11 @@ class OverlayService : Service() {
     private fun loadScripts() {
         scope.launch {
             scripts = runCatching { ServiceLocator.scripts.list() }.getOrDefault(emptyList())
-            selectedScript = scripts.firstOrNull { it.id == selectedScript?.id }
+            // 优先选中首页「运行」入口带过来的任务，其次保持当前选择，最后回退到第一个任务。
+            val preferred = pendingScriptId
+            pendingScriptId = null
+            selectedScript = scripts.firstOrNull { it.id == preferred }
+                ?: scripts.firstOrNull { it.id == selectedScript?.id }
                 ?: scripts.firstOrNull()
             updateScriptLabel()
         }
@@ -857,8 +867,13 @@ class OverlayService : Service() {
         private const val LOG_MAX_LINES = 120
         private const val DELAY_STEP_MS = 100L
 
-        fun start(context: Context) {
-            context.startService(Intent(context, OverlayService::class.java))
+        private const val EXTRA_SCRIPT_ID = "script_id"
+
+        /** 启动悬浮球；[scriptId] 用于把某个任务设为悬浮球当前选中（长按悬浮球即运行它）。 */
+        fun start(context: Context, scriptId: String? = null) {
+            val intent = Intent(context, OverlayService::class.java)
+            if (!scriptId.isNullOrBlank()) intent.putExtra(EXTRA_SCRIPT_ID, scriptId)
+            context.startService(intent)
         }
 
         fun stop(context: Context) {
