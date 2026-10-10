@@ -75,13 +75,18 @@ import kotlinx.coroutines.withContext
  * 函数包列表页（FR-6B / Task 12A）。
  *
  * 只负责函数包列表与元数据操作：新建、重命名、复制、删除（二次确认 + 引用保护）。
- * 函数包内容（步骤树）编辑在脚本编辑器任务（Task 12）统一接入，
- * 当前点击包条目仅提示「内容编辑即将上线」。
+ * 点击卡片主体经 [onOpenPackage] 回调打开函数包内容编辑器（PackageEditorScreen），
+ * 函数包是独立实体、内容可编辑（FR-6B）。
  *
  * 自带 ViewModel 工厂：以 applicationContext 构造 [FunctionPackageRepository]。
+ *
+ * @param onOpenPackage 打开函数包内容编辑器回调，参数为函数包 id（导航层接入）
  */
 @Composable
-fun PackagesScreen(modifier: Modifier = Modifier) {
+fun PackagesScreen(
+    onOpenPackage: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     val appContext = LocalContext.current.applicationContext
     val viewModel: PackagesViewModel = viewModel(
         factory = remember(appContext) {
@@ -152,7 +157,7 @@ fun PackagesScreen(modifier: Modifier = Modifier) {
                                     viewModel.onIntent(PackagesIntent.ToggleExpand(pkg))
                                 },
                                 onClickContent = {
-                                    viewModel.onIntent(PackagesIntent.ClickContent(pkg))
+                                    onOpenPackage(pkg.id)
                                 },
                                 onRename = {
                                     viewModel.onIntent(PackagesIntent.ShowRenameDialog(pkg))
@@ -218,7 +223,7 @@ fun PackagesScreen(modifier: Modifier = Modifier) {
 // 子组件
 // =================================================================================
 
-/** 单个函数包卡片：点击主体提示内容编辑即将上线，展开后显示元数据操作 */
+/** 单个函数包卡片：点击主体触发打开内容编辑器回调，展开后显示元数据操作 */
 @Composable
 private fun PackageCard(
     pkg: FunctionPackage,
@@ -385,7 +390,6 @@ sealed interface PackagesIntent {
     data class ConfirmDelete(val pkg: FunctionPackage) : PackagesIntent
     data object DismissDialog : PackagesIntent
     data class ToggleExpand(val pkg: FunctionPackage) : PackagesIntent
-    data class ClickContent(val pkg: FunctionPackage) : PackagesIntent
     data object MessageShown : PackagesIntent
 }
 
@@ -440,9 +444,6 @@ class PackagesViewModel(
                         expandedId = if (current.expandedId == intent.pkg.id) null else intent.pkg.id
                     )
                 }
-
-            is PackagesIntent.ClickContent ->
-                postMessage("内容编辑即将上线")
 
             PackagesIntent.MessageShown ->
                 _state.update { it.copy(message = null) }

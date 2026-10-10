@@ -96,7 +96,13 @@ fun AppNavigation() {
                 )
             }
             composable(Routes.PACKAGES) {
-                com.autoclicker.ui.packages.PackagesScreen()
+                com.autoclicker.ui.packages.PackagesScreen(
+                    onOpenPackage = { id ->
+                        navController.navigate(Routes.packageEditor(id)) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
             }
             composable(Routes.PERMISSIONS) {
                 PermissionScreen()
@@ -129,6 +135,20 @@ fun AppNavigation() {
 
             composable(Routes.TRIGGERS) {
                 com.autoclicker.ui.trigger.TriggerScreen()
+            }
+
+            composable(
+                route = Routes.PACKAGE_EDITOR,
+                arguments = listOf(
+                    androidx.navigation.navArgument("packageId") {
+                        type = androidx.navigation.NavType.StringType
+                    }
+                ),
+            ) { entry ->
+                com.autoclicker.ui.packages.PackageEditorScreen(
+                    packageId = entry.arguments?.getString("packageId").orEmpty(),
+                    onBack = { navController.popBackStack() },
+                )
             }
         }
     }

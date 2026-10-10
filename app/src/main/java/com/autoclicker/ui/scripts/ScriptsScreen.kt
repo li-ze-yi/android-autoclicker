@@ -58,8 +58,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autoclicker.MyApplication
+import com.autoclicker.core.data.bundle.ScriptBundle
 import com.autoclicker.core.data.scripts.ScriptFileRepository
-import com.autoclicker.domain.codec.ScriptCodec
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptStep
@@ -83,7 +83,8 @@ import java.util.UUID
  * - 展示脚本仓库中的全部脚本（名称、步骤数）；
  * - 新建空脚本并进入编辑器；
  * - 运行（coordinator.startScript）、重命名、复制（深拷贝 + 新 id）、删除（二次确认）；
- * - 导出脚本 JSON（SAF CreateDocument）；导入脚本 JSON（SAF OpenDocument，自动分配新 id）。
+ * - 导出脚本完整包 zip（SAF CreateDocument，含脚本、函数包、识图模板与清单）；
+ *   导入脚本包 zip（SAF OpenDocument，自动分配新 id 并处理依赖 ID 冲突）。
  *
  * @param onOpenScript 打开步骤编辑器回调，参数为脚本 id（由导航层接入）
  */
@@ -123,10 +124,10 @@ fun ScriptsScreen(
         viewModel.onIntent(ScriptsIntent.OpenConsumed)
     }
 
-    // 导出：先记住待导出脚本，再由 SAF 创建目标文件
+    // 导出：先记住待导出脚本，再由 SAF 创建目标 zip 文件
     var scriptToExport by remember { mutableStateOf<Script?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
+        contract = ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
         val pending = scriptToExport
         if (uri != null && pending != null) {
@@ -135,7 +136,7 @@ fun ScriptsScreen(
         scriptToExport = null
     }
 
-    // 导入：SAF 选择 JSON 文件
+    // 导入：SAF 选择脚本包 zip 文件
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -148,7 +149,7 @@ fun ScriptsScreen(
             TopAppBar(
                 title = { Text("脚本库") },
                 actions = {
-                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
                         Icon(Icons.Filled.FileUpload, contentDescription = "导入脚本")
                     }
                     IconButton(onClick = { viewModel.onIntent(ScriptsIntent.CreateNew) }) {
@@ -171,7 +172,7 @@ fun ScriptsScreen(
                 state.scripts.isEmpty() ->
                     EmptyScripts(
                         onCreate = { viewModel.onIntent(ScriptsIntent.CreateNew) },
-                        onImport = { importLauncher.launch(arrayOf("application/json")) },
+                        onImport = { importLauncher.launch(arrayOf("application/zip")) },
                         modifier = Modifier.align(Alignment.Center),
                     )
 
@@ -197,7 +198,7 @@ fun ScriptsScreen(
                                 },
                                 onExport = {
                                     scriptToExport = script
-                                    exportLauncher.launch("${script.name}.json")
+                                    exportLauncher.launch("${script.name}.zip")
                                 },
                             )
                         }
@@ -430,6 +431,9 @@ class ScriptsViewModel(
 
     private val appContext: Context = app.applicationContext
 
+    /** 脚本完整包（zip）导入导出器 */
+    private val bundle = ScriptBundle(appContext)
+
     private val _state = MutableStateFlow(ScriptsUiState())
     val state: StateFlow<ScriptsUiState> = _state.asStateFlow()
 
@@ -566,50 +570,45 @@ class ScriptsViewModel(
     }
 
     /**
-     * 导出脚本：把 [ScriptCodec.encode] 的 JSON 文本直接写入 SAF 创建的文件。
+     * 导出脚本完整包：脚本 + 递归收集的函数包与识图模板，经 [ScriptBundle]
+     * 打包为 zip 并写入 SAF 创建的文件。
      */
     fun exportTo(script: Script, uri: Uri) {
         viewModelScope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    val text = ScriptCodec.encode(script)
                     appContext.contentResolver.openOutputStream(uri)?.use { stream ->
-                        stream.write(text.toByteArray(Charsets.UTF_8))
+                        bundle.exportBundle(script, stream)
                     } ?: throw IllegalStateException("无法打开要写入的文件")
                 }
             }
             result.fold(
-                onSuccess = { postMessage("已导出：${script.name}.json") },
+                onSuccess = { postMessage("已导出：${script.name}.zip") },
                 onFailure = { postMessage("导出失败：${it.message ?: "未知错误"}") },
             )
         }
     }
 
     /**
-     * 导入脚本：SAF 读取文本 → [ScriptCodec.decode] → 分配新脚本 id 与新步骤 id → upsert。
-     * 任何失败（文件不可读、JSON 损坏、版本不支持、结构非法）均给中文 Snackbar。
+     * 导入脚本完整包：SAF 读取 zip → [ScriptBundle.importBundle] 解析、
+     * 处理函数包/模板 ID 冲突、分配新脚本 id 并统一落库。
+     * 任何失败（坏 zip、缺文件、解析失败、结构非法）均给中文 Snackbar，不写半截。
      */
     fun importFrom(uri: Uri) {
         viewModelScope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    val text = appContext.contentResolver.openInputStream(uri)?.use { stream ->
-                        stream.readBytes().toString(Charsets.UTF_8)
+                    appContext.contentResolver.openInputStream(uri)?.use { stream ->
+                        bundle.importBundle(stream)
                     } ?: throw IllegalStateException("无法读取所选文件")
-                    val decoded = ScriptCodec.decode(text)
-                    val reidentified = decoded.copy(
-                        id = repository.newId(),
-                        steps = decoded.steps.regenIds(),
-                    )
-                    repository.upsert(reidentified)
                 }
             }
             result.fold(
-                onSuccess = {
-                    postMessage("导入成功")
+                onSuccess = { imported ->
+                    postMessage(imported.summaryZh)
                     refresh()
                 },
-                onFailure = { postMessage("导入失败：${it.message ?: "文件不是有效的脚本 JSON"}") },
+                onFailure = { postMessage("导入失败：${it.message ?: "文件不是有效的脚本包"}") },
             )
         }
     }

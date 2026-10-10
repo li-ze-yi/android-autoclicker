@@ -30,6 +30,8 @@ object Routes {
     const val RECORD = "record"
     const val TRIGGERS = "triggers"
     const val VISION_TEMPLATES = "vision_templates"
+    const val PACKAGE_EDITOR = "package_editor?packageId={packageId}"
+    fun packageEditor(packageId: String) = "package_editor?packageId=$packageId"
     const val SCRIPT_EDITOR = "script_editor?scriptId={scriptId}"
     fun scriptEditor(scriptId: String) = "script_editor?scriptId=$scriptId"
 }
