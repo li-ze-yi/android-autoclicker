@@ -92,7 +92,15 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
+          gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
+
+      - name: 上传单元测试报告
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
 
       # 输出 APK 签名证书指纹并写入环境变量，便于逐次核对前后构建是否同一签名。
       - name: 输出 APK 签名指纹
