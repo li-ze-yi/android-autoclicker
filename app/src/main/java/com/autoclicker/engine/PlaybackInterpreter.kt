@@ -62,8 +62,9 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
             gate.awaitResume()
             when (val ins = plan.instructions[pc]) {
                 is DoStep -> {
-                    // 用节点树中的步骤序号显示，而不是指令下标（指令下标会把 1 号步骤显示成 2）。
-                    onStep(ins.step, plan.stepOrder[ins.stepId] ?: 1, total)
+                    // 传 0 基的步骤序号：StepExecutionInfo.stepIndex 约定为 0 基，显示端会 +1。
+                    // 这里若直接传指令下标（plan.stepIndex）会把 1 号步骤显示成 2 号。
+                    onStep(ins.step, (plan.stepOrder[ins.stepId] ?: 1) - 1, total)
                     // 换到别的步骤执行，说明自跳转链条已断开，重置熔断计数。
                     if (ins.stepId != selfJumpStepId) {
                         selfJumpStepId = null
@@ -106,8 +107,7 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                     }
                     logBranchOnce(ins.stepId, outcome?.success, target, notifiedBranches)
                     // 自跳转熔断：跳转目标就是本步骤时（如「成功→本步骤」），只要条件一直成立
-                    // 就会无限原地打转、永远走不到下一步。典型场景：直播间列表持续刷新，
-                    // 目标始终存在，「识别不到」这个出口永远不触发。超过上限强制继续下一步。
+                    // 就会无限原地打转、永远走不到下一步。超过上限强制继续下一步。
                     val selfJump = target != null && target == ins.stepId && jumped != null
                     if (selfJump) {
                         if (selfJumpStepId == ins.stepId) {
@@ -144,7 +144,7 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
         const val MAX_ITERATIONS = 5_000_000
 
         /** 同一对步骤之间连续自跳转的次数上限（成功→本步骤 这类配置的熔断保护）。 */
-        const val MAX_SELF_JUMPS = 50
+        const val MAX_SELF_JUMPS = 10
     }
 
     /** 每条分支判定在本次运行里只记一次日志，避免自跳转重试循环刷屏。 */
