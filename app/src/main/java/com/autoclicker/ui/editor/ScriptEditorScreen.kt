@@ -74,6 +74,7 @@ import com.autoclicker.domain.model.flattenSteps
 import com.autoclicker.domain.rule.StructureValidator
 import com.autoclicker.domain.rule.ValidationIssue
 import com.autoclicker.domain.rule.hasOutcomeBranch
+import com.autoclicker.engine.PlaybackInterpreter
 import com.autoclicker.ui.EditorAction
 import kotlinx.coroutines.launch
 
@@ -913,6 +914,15 @@ private fun StepConfigDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (success == step.id) {
+                    Text(
+                        "「成功跳转」指向本步骤：只要还能识别到目标就会一直重复本步骤，" +
+                            "适合「点完一个再找下一个」；连续 ${PlaybackInterpreter.MAX_SELF_JUMPS} 次后" +
+                            "会强制继续下一步，避免一直原地循环。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {

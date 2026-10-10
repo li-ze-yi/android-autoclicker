@@ -40,22 +40,27 @@ data class JumpIns(override val stepId: String?, val targetStepId: String) : Ins
 /**
  * 执行计划：由节点树编译得到的线性指令序列，以及「步骤 id → 指令下标」映射。
  * 分支/跳转的目标以步骤 id 表达，运行期通过 [stepIndex] 解析为指令下标。
+ *
+ * [stepOrder] 给出步骤在节点树中的序号（从 1 开始），用于界面上显示「第 N/共 M 步」，
+ * 不能拿 [stepIndex] 当序号用——那是指令下标，会把 1 号步骤显示成 2。
  */
 class PlaybackPlan private constructor(
     val instructions: List<Instruction>,
     val stepIndex: Map<String, Int>,
+    val stepOrder: Map<String, Int>,
 ) {
     companion object {
         fun compile(nodes: List<ScriptNode>): PlaybackPlan {
             val builder = Builder()
             builder.emit(nodes)
-            return PlaybackPlan(builder.out, builder.stepIndex)
+            return PlaybackPlan(builder.out, builder.stepIndex, builder.stepOrder)
         }
     }
 
     private class Builder {
         val out = ArrayList<Instruction>()
         val stepIndex = LinkedHashMap<String, Int>()
+        val stepOrder = LinkedHashMap<String, Int>()
 
         fun emit(nodes: List<ScriptNode>) {
             for (node in nodes) {
@@ -69,6 +74,7 @@ class PlaybackPlan private constructor(
         private fun emitStep(step: StepNode) {
             val start = out.size
             stepIndex[step.id] = start
+            stepOrder[step.id] = stepOrder.size + 1
             out.add(DoStep(step.id, step))
             if (step.delayAfterMs > 0) {
                 // 延时要落在「重复执行」内部：连点时每点一次都等一会儿，屏幕才有时间刷新。

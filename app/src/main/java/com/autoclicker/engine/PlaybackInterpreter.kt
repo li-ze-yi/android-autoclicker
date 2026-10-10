@@ -52,6 +52,9 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
         val total = plan.stepIndex.size
         var pc = 0
         var guard = 0
+        // 自跳转熔断状态：记录当前正在自跳转的步骤与连续次数。
+        var selfJumpStepId: String? = null
+        var selfJumpCount = 0
         while (pc in plan.instructions.indices) {
             if (guard++ > MAX_ITERATIONS) {
                 throw IllegalStateException("执行步数超过上限，可能存在死循环")
@@ -59,7 +62,13 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
             gate.awaitResume()
             when (val ins = plan.instructions[pc]) {
                 is DoStep -> {
-                    onStep(ins.step, (plan.stepIndex[ins.stepId] ?: 0) + 1, total)
+                    // 用节点树中的步骤序号显示，而不是指令下标（指令下标会把 1 号步骤显示成 2）。
+                    onStep(ins.step, plan.stepOrder[ins.stepId] ?: 1, total)
+                    // 换到别的步骤执行，说明自跳转链条已断开，重置熔断计数。
+                    if (ins.stepId != selfJumpStepId) {
+                        selfJumpStepId = null
+                        selfJumpCount = 0
+                    }
                     val outcome = runner.run(ins.step, ctx)
                     outcomes[ins.stepId] = outcome
                     if (outcome.endTask) return
@@ -96,7 +105,33 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                         RuntimeBus.log(LogLevel.WARN, "跳转目标步骤已不存在，改为继续下一步：$target")
                     }
                     logBranchOnce(ins.stepId, outcome?.success, target, notifiedBranches)
-                    pc = jumped ?: (pc + 1)
+                    // 自跳转熔断：跳转目标就是本步骤时（如「成功→本步骤」），只要条件一直成立
+                    // 就会无限原地打转、永远走不到下一步。典型场景：直播间列表持续刷新，
+                    // 目标始终存在，「识别不到」这个出口永远不触发。超过上限强制继续下一步。
+                    val selfJump = target != null && target == ins.stepId && jumped != null
+                    if (selfJump) {
+                        if (selfJumpStepId == ins.stepId) {
+                            selfJumpCount++
+                        } else {
+                            selfJumpStepId = ins.stepId
+                            selfJumpCount = 1
+                        }
+                    } else {
+                        selfJumpStepId = null
+                        selfJumpCount = 0
+                    }
+                    if (selfJump && selfJumpCount > MAX_SELF_JUMPS) {
+                        RuntimeBus.log(
+                            LogLevel.WARN,
+                            "步骤已连续自跳转 $MAX_SELF_JUMPS 次（跳转目标为本步骤），" +
+                                "为避免一直原地循环，改为继续下一步",
+                        )
+                        selfJumpStepId = null
+                        selfJumpCount = 0
+                        pc += 1
+                    } else {
+                        pc = jumped ?: (pc + 1)
+                    }
                 }
 
                 is JumpIns -> pc = plan.stepIndex[ins.targetStepId] ?: (pc + 1)
@@ -107,6 +142,9 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
     companion object {
         /** 单次运行允许的最大指令数，作为死循环兜底。 */
         const val MAX_ITERATIONS = 5_000_000
+
+        /** 同一对步骤之间连续自跳转的次数上限（成功→本步骤 这类配置的熔断保护）。 */
+        const val MAX_SELF_JUMPS = 50
     }
 
     /** 每条分支判定在本次运行里只记一次日志，避免自跳转重试循环刷屏。 */
