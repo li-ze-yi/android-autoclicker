@@ -1,58 +1,57 @@
 package com.autoclicker.service.record
 
-import android.annotation.SuppressLint
+import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.widget.TextView
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.di.ServiceLocator
-import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.ClickAction
-import com.autoclicker.domain.model.GestureAction
-import com.autoclicker.domain.model.GestureStroke
 import com.autoclicker.domain.model.Ids
+import com.autoclicker.domain.model.LongPressAction
 import com.autoclicker.domain.model.PercentPoint
-import com.autoclicker.domain.model.PixelPoint
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.domain.model.SwipeAction
-import com.autoclicker.platform.PixelStroke
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlin.math.hypot
 
 /**
- * 触摸录制器：全屏透明悬浮层捕获 [MotionEvent]，抬手时把轨迹归一化为百分比坐标，
- * 生成 [StepNode]（点按→[ClickAction]；滑动/手势→[SwipeAction]/[GestureAction]）写入 [RecorderBus]；
- * 同时通过无障碍把同一手势转发回底层 App，避免录制层遮挡导致底层收不到操作。
+ * 触摸录制器（**基于无障碍服务**，不遮挡屏幕）。
+ *
+ * 录制期间由 [AccessibilityService.onAccessibilityEvent] 回调本类的 [onEvent]，
+ * 依据事件类型生成步骤：
+ * - `TYPE_VIEW_CLICKED` → [ClickAction]（取控件 bounds 中心）
+ * - `TYPE_VIEW_LONG_CLICKED` → [LongPressAction]
+ * - `TYPE_VIEW_SCROLLED` → [SwipeAction]（按滚动方向合成）
+ *
+ * 另外提供：
+ * - 录制状态角标（不可触摸的小角标）；
+ * - 手动取点（一次性全屏取点层，单击即取点并立即消失，仅用于补充任意像素坐标）。
  */
-class Recorder(context: Context) {
+class Recorder(private val appContext: Context) {
 
-    private val appContext: Context = context.applicationContext
     private val windowManager: WindowManager =
         appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
     @Volatile
-    private var scope: CoroutineScope? = null
-
-    @Volatile
-    private var overlay: View? = null
-
-    private var layerParams: WindowManager.LayoutParams? = null
-
-    @Volatile
-    private var attached = false
+    private var recording = false
 
     @Volatile
     private var paused = false
@@ -60,8 +59,15 @@ class Recorder(context: Context) {
     @Volatile
     private var autoRecordDelay = true
 
+    private var settingsScope: CoroutineScope? = null
+    private var badgeView: TextView? = null
+    private var pickerView: View? = null
+
     private var lastStepId: String? = null
-    private var lastEndTimeMs = 0L
+    private var lastEventTimeMs = 0L
+    private var lastClickCenterX = Int.MIN_VALUE
+    private var lastClickCenterY = Int.MIN_VALUE
+    private var lastClickTimeMs = 0L
 
     private val screenWidth: Int
         get() = appContext.resources.displayMetrics.widthPixels.coerceAtLeast(1)
@@ -69,262 +75,313 @@ class Recorder(context: Context) {
     private val screenHeight: Int
         get() = appContext.resources.displayMetrics.heightPixels.coerceAtLeast(1)
 
-    fun isRecording(): Boolean = overlay != null
+    fun isRecording(): Boolean = recording
+
+    // ---------------- 录制会话 ----------------
 
     fun start() {
-        if (isRecording()) return
-        if (!Settings.canDrawOverlays(appContext)) {
-            RuntimeBus.log(LogLevel.ERROR, "无法开始录制：缺少悬浮窗权限")
+        if (recording) return
+        if (!hasOverlayPermission()) {
+            RuntimeBus.log(LogLevel.ERROR, "无法开始录制：缺少悬浮窗权限（用于显示录制角标）")
             return
         }
-        val recorderScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        scope = recorderScope
-        recorderScope.launch {
-            ServiceLocator.settings.settings.collect { settings ->
-                autoRecordDelay = settings.autoRecordDelay
+        if (ServiceLocator.nodeLocator == null) {
+            RuntimeBus.log(LogLevel.WARN, "无障碍服务未连接，录制将无法捕获事件")
+        }
+        recording = true
+        paused = false
+        lastStepId = null
+        lastEventTimeMs = 0L
+        lastClickCenterX = Int.MIN_VALUE
+        lastClickCenterY = Int.MIN_VALUE
+        observeSettings()
+        showBadge()
+        RuntimeBus.setRecording(RecordingState.RECORDING)
+        RuntimeBus.log("录制已开始：请正常操作目标 App，操作会被旁路记录")
+    }
+
+    /** 切换暂停/继续（暂停期间不记录事件）。 */
+    fun pause() {
+        if (!recording) return
+        paused = !paused
+        RuntimeBus.setRecording(if (paused) RecordingState.PAUSED else RecordingState.RECORDING)
+        RuntimeBus.log(if (paused) "录制已暂停" else "录制已继续")
+    }
+
+    fun stop() {
+        if (!recording) {
+            dismissPicker()
+            return
+        }
+        recording = false
+        paused = false
+        dismissPicker()
+        hideBadge()
+        settingsScope?.cancel()
+        settingsScope = null
+        RuntimeBus.setRecording(RecordingState.IDLE)
+        RuntimeBus.log("录制已结束")
+    }
+
+    // ---------------- 无障碍事件入口 ----------------
+
+    /** 由无障碍服务在 [AccessibilityService.onAccessibilityEvent] 中回调。 */
+    fun onEvent(event: AccessibilityEvent) {
+        if (!recording || paused) return
+        val pkg = event.packageName?.toString() ?: return
+        // 过滤本应用自身的事件，避免把「停止/暂停」等点击录进去。
+        if (pkg == appContext.packageName) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> recordTap(event, longPress = false)
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> recordTap(event, longPress = true)
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> recordScroll(event)
+            else -> Unit
+        }
+    }
+
+    private fun recordTap(event: AccessibilityEvent, longPress: Boolean) {
+        val rect = boundsOf(event) ?: return
+        if (rect.width() <= 0 || rect.height() <= 0) return
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        val now = SystemClock.uptimeMillis()
+        // 去重：无障碍可能对同一次点击派发多个事件。
+        if (!longPress &&
+            cx == lastClickCenterX && cy == lastClickCenterY && now - lastClickTimeMs < DEDUPE_MS
+        ) {
+            return
+        }
+        lastClickCenterX = cx
+        lastClickCenterY = cy
+        lastClickTimeMs = now
+
+        val point = toPercent(cx, cy)
+        val action = if (longPress) LongPressAction(point) else ClickAction(point)
+        appendStep(action, now)
+        RuntimeBus.log(if (longPress) "录制：长按 (${fmt(point.x)}, ${fmt(point.y)})" else "录制：点击 (${fmt(point.x)}, ${fmt(point.y)})")
+    }
+
+    private fun recordScroll(event: AccessibilityEvent) {
+        val now = SystemClock.uptimeMillis()
+        val vertical = scrollIsVertical(event)
+        val forward = scrollIsForward(event)
+        // 手指滑动方向与内容滚动方向相反：内容向下滚 → 手指向上滑。
+        val from: PercentPoint
+        val to: PercentPoint
+        if (vertical) {
+            if (forward) {
+                from = PercentPoint(0.5f, 0.7f); to = PercentPoint(0.5f, 0.35f)
+            } else {
+                from = PercentPoint(0.5f, 0.35f); to = PercentPoint(0.5f, 0.7f)
+            }
+        } else {
+            if (forward) {
+                from = PercentPoint(0.75f, 0.5f); to = PercentPoint(0.3f, 0.5f)
+            } else {
+                from = PercentPoint(0.3f, 0.5f); to = PercentPoint(0.75f, 0.5f)
             }
         }
+        appendStep(SwipeAction(from = from, to = to, durationMs = 300), now)
+        RuntimeBus.log("录制：滑动（${if (vertical) "纵向" else "横向"}）")
+    }
 
-        val view = TouchLayerView(appContext)
+    private fun boundsOf(event: AccessibilityEvent): Rect? {
+        val source = event.source
+        if (source != null) {
+            val rect = Rect()
+            source.getBoundsInScreen(rect)
+            if (!rect.isEmpty) return rect
+        }
+        return null
+    }
+
+    private fun scrollIsVertical(event: AccessibilityEvent): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val dx = event.scrollDeltaX
+            val dy = event.scrollDeltaY
+            if (dx != 0 || dy != 0) return kotlin.math.abs(dy) >= kotlin.math.abs(dx)
+        }
+        return true
+    }
+
+    private fun scrollIsForward(event: AccessibilityEvent): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val dy = event.scrollDeltaY
+            val dx = event.scrollDeltaX
+            val delta = if (kotlin.math.abs(dy) >= kotlin.math.abs(dx)) dy else dx
+            if (delta != 0) return delta > 0
+        }
+        return event.toIndex >= event.fromIndex
+    }
+
+    private fun appendStep(action: com.autoclicker.domain.model.Action, now: Long) {
+        if (autoRecordDelay) {
+            val previousId = lastStepId
+            if (previousId != null) {
+                val gap = (now - lastEventTimeMs).coerceAtLeast(0L)
+                val previous = RecorderBus.steps.value.firstOrNull { it.id == previousId }
+                if (previous != null) RecorderBus.updateStep(previous.copy(delayAfterMs = gap))
+            }
+        }
+        val step = StepNode(id = Ids.newId(), action = action)
+        RecorderBus.addStep(step)
+        lastStepId = step.id
+        lastEventTimeMs = now
+    }
+
+    private fun toPercent(x: Int, y: Int): PercentPoint = PercentPoint(
+        (x.toFloat() / screenWidth).coerceIn(0f, 1f),
+        (y.toFloat() / screenHeight).coerceIn(0f, 1f),
+    )
+
+    // ---------------- 手动取点 ----------------
+
+    /**
+     * 进入一次性取点：屏幕出现半透明取点层，单击任意位置即补一个点击步骤并立即消失。
+     * 仅用于补充无障碍事件无法覆盖的任意像素坐标。
+     */
+    fun pickPoint() {
+        if (pickerView != null) return
+        if (!hasOverlayPermission()) {
+            RuntimeBus.log(LogLevel.ERROR, "无法取点：缺少悬浮窗权限")
+            return
+        }
+        val view = PickerView(appContext)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP or Gravity.START }
-
         try {
             windowManager.addView(view, params)
+            pickerView = view
+            RuntimeBus.log("取点模式：点击屏幕上要添加的位置（单击即取点）")
         } catch (t: Throwable) {
-            RuntimeBus.log(LogLevel.ERROR, "录制触摸层创建失败：${t.message}")
-            recorderScope.cancel()
-            scope = null
-            return
-        }
-        layerParams = params
-        overlay = view
-        attached = true
-        paused = false
-        lastStepId = null
-        lastEndTimeMs = 0L
-        RuntimeBus.setRecording(RecordingState.RECORDING)
-        RuntimeBus.log("录制已开始")
-    }
-
-    /** 切换暂停/继续：暂停时移除触摸层，让底层 App 恢复可操作。 */
-    fun pause() {
-        val view = overlay ?: return
-        if (paused) {
-            val params = layerParams ?: return
-            try {
-                windowManager.addView(view, params)
-                attached = true
-            } catch (t: Throwable) {
-                RuntimeBus.log(LogLevel.ERROR, "录制恢复失败：${t.message}")
-                return
-            }
-            paused = false
-            RuntimeBus.setRecording(RecordingState.RECORDING)
-            RuntimeBus.log("录制已继续")
-        } else {
-            if (attached) {
-                try {
-                    windowManager.removeView(view)
-                } catch (t: Throwable) {
-                    // 忽略移除异常。
-                }
-                attached = false
-            }
-            paused = true
-            RuntimeBus.setRecording(RecordingState.PAUSED)
-            RuntimeBus.log("录制已暂停")
+            pickerView = null
+            RuntimeBus.log(LogLevel.ERROR, "取点层创建失败：${t.message}")
         }
     }
 
-    fun stop() {
-        val view = overlay ?: return
-        overlay = null
-        if (attached) {
-            try {
-                windowManager.removeView(view)
-            } catch (t: Throwable) {
-                // 忽略移除异常。
-            }
-            attached = false
+    private fun dismissPicker() {
+        val view = pickerView ?: return
+        pickerView = null
+        try {
+            windowManager.removeView(view)
+        } catch (t: Throwable) {
+            // 忽略移除异常。
         }
-        layerParams = null
-        paused = false
-        scope?.cancel()
-        scope = null
-        RuntimeBus.setRecording(RecordingState.IDLE)
-        RuntimeBus.log("录制已结束")
     }
 
-    // ---------------- 手势处理 ----------------
+    private fun dp(value: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        value.toFloat(),
+        appContext.resources.displayMetrics,
+    ).toInt()
 
-    @SuppressLint("ViewConstructor")
-    private inner class TouchLayerView(context: Context) : View(context) {
-
-        private val points = ArrayList<PixelPoint>()
-        private var downTime = 0L
+    private inner class PickerView(context: Context) : TextView(context) {
+        init {
+            text = "取点模式：点击屏幕上要添加的位置"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x44000000)
+            gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
+            setPadding(0, dp(48), 0, 0)
+        }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downTime = SystemClock.uptimeMillis()
-                    points.clear()
-                    addPoint(event)
-                    onGestureStart(downTime)
-                    return true
-                }
-
-                MotionEvent.ACTION_MOVE -> {
-                    addPoint(event)
-                    return true
-                }
-
+                MotionEvent.ACTION_DOWN -> return true
                 MotionEvent.ACTION_UP -> {
-                    addPoint(event)
-                    finishGesture(SystemClock.uptimeMillis())
+                    val point = toPercent(event.rawX.toInt(), event.rawY.toInt())
+                    val step = StepNode(id = Ids.newId(), action = ClickAction(point))
+                    RecorderBus.addStep(step)
+                    lastStepId = step.id
+                    lastEventTimeMs = SystemClock.uptimeMillis()
+                    RuntimeBus.log("取点：点击 (${fmt(point.x)}, ${fmt(point.y)})")
+                    dismissPicker()
                     return true
                 }
-
-                MotionEvent.ACTION_CANCEL -> {
-                    points.clear()
-                    return true
-                }
             }
-            return false
-        }
-
-        private fun addPoint(event: MotionEvent) {
-            val point = PixelPoint(event.rawX.toInt(), event.rawY.toInt())
-            if (points.isEmpty()) {
-                points.add(point)
-                return
-            }
-            if (distance(points.last(), point) >= MIN_MOVE_PX) {
-                points.add(point)
-            } else {
-                // 抖动点直接替换为上一点，避免产生冗余轨迹。
-                points[points.size - 1] = point
-            }
-        }
-
-        private fun finishGesture(endTime: Long) {
-            val gesturePoints = points.toList()
-            if (gesturePoints.isEmpty()) return
-            val duration = (endTime - downTime).coerceAtLeast(1L)
-
-            val action = buildAction(gesturePoints, duration)
-            val step = StepNode(id = Ids.newId(), action = action)
-            RecorderBus.addStep(step)
-            lastStepId = step.id
-            lastEndTimeMs = endTime
-
-            RuntimeBus.log("录制步骤：${describe(action)}")
-            forwardGesture(gesturePoints, duration)
+            return super.onTouchEvent(event)
         }
     }
 
-    private fun onGestureStart(now: Long) {
-        if (!autoRecordDelay) return
-        val previousId = lastStepId ?: return
-        val gap = (now - lastEndTimeMs).coerceAtLeast(0L)
-        val previous = RecorderBus.steps.value.firstOrNull { it.id == previousId } ?: return
-        RecorderBus.updateStep(previous.copy(delayAfterMs = gap))
+    // ---------------- 状态角标 ----------------
+
+    private fun showBadge() {
+        if (badgeView != null) return
+        val view = TextView(appContext).apply {
+            text = "● 录制中"
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            setBackgroundColor(0xCCD32F2F.toInt())
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(8)
+            y = dp(8)
+        }
+        try {
+            windowManager.addView(view, params)
+            badgeView = view
+        } catch (t: Throwable) {
+            badgeView = null
+            RuntimeBus.log(LogLevel.WARN, "录制角标创建失败：${t.message}")
+        }
     }
 
-    private fun buildAction(points: List<PixelPoint>, duration: Long): Action {
-        val down = points.first()
-        val maxDisplacement = points.maxOf { distance(down, it) }
-        if (maxDisplacement < TAP_PX) {
-            return ClickAction(point = toPercent(down), durationMs = duration)
-        }
-        val simplified = simplify(points)
-        return if (simplified.size <= 2) {
-            SwipeAction(
-                from = toPercent(simplified.first()),
-                to = toPercent(simplified.last()),
-                durationMs = duration,
-            )
-        } else {
-            GestureAction(
-                strokes = listOf(
-                    GestureStroke(
-                        points = simplified.map { toPercent(it) },
-                        startTimeMs = 0L,
-                        durationMs = duration,
-                    ),
-                ),
-            )
+    private fun hideBadge() {
+        val view = badgeView ?: return
+        badgeView = null
+        try {
+            windowManager.removeView(view)
+        } catch (t: Throwable) {
+            // 忽略移除异常。
         }
     }
 
-    private fun simplify(points: List<PixelPoint>): List<PixelPoint> {
-        if (points.size <= 2) return points
-        val result = ArrayList<PixelPoint>()
-        result.add(points.first())
-        for (i in 1 until points.size - 1) {
-            if (distance(result.last(), points[i]) >= SWIPE_SIMPLIFY_PX) result.add(points[i])
-        }
-        result.add(points.last())
-        return result
-    }
+    private fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(appContext)
 
-    private fun toPercent(point: PixelPoint): PercentPoint = PercentPoint(
-        (point.x.toFloat() / screenWidth).coerceIn(0f, 1f),
-        (point.y.toFloat() / screenHeight).coerceIn(0f, 1f),
-    )
-
-    private fun forwardGesture(points: List<PixelPoint>, duration: Long) {
-        val executor = ServiceLocator.gestureExecutor ?: return
-        val currentScope = scope ?: return
-        currentScope.launch {
-            try {
-                executor.perform(
-                    listOf(
-                        PixelStroke(
-                            points = points,
-                            startTimeMs = 0L,
-                            durationMs = duration.coerceAtLeast(1L),
-                        ),
-                    ),
-                )
-            } catch (t: Throwable) {
-                RuntimeBus.log(LogLevel.WARN, "录制手势转发失败：${t.message}")
+    private fun observeSettings() {
+        settingsScope?.cancel()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        settingsScope = scope
+        scope.launch {
+            ServiceLocator.settings.settings.collect { settings ->
+                autoRecordDelay = settings.autoRecordDelay
             }
         }
     }
 
-    private fun describe(action: Action): String = when (action) {
-        is ClickAction -> "点按 (${"%.3f".format(action.point.x)}, ${"%.3f".format(action.point.y)})"
-        is SwipeAction -> "滑动 (${"%.2f".format(action.from.x)},${"%.2f".format(action.from.y)})→" +
-            "(${"%.2f".format(action.to.x)},${"%.2f".format(action.to.y)})"
-        is GestureAction -> "手势 ${action.strokes.firstOrNull()?.points?.size ?: 0} 点"
-        else -> action.toString()
-    }
-
-    private fun distance(a: PixelPoint, b: PixelPoint): Float =
-        hypot((a.x - b.x).toFloat(), (a.y - b.y).toFloat())
+    private fun fmt(value: Float): String = "%.3f".format(value)
 
     companion object {
-        private const val MIN_MOVE_PX = 8f
-        private const val TAP_PX = 24f
-        private const val SWIPE_SIMPLIFY_PX = 12f
+        private const val DEDUPE_MS = 300L
 
         @Volatile
         private var instance: Recorder? = null
 
+        /** 当前录制器（供无障碍服务回调事件）。 */
+        fun current(): Recorder? = instance
+
+        private fun obtain(context: Context): Recorder =
+            instance ?: Recorder(context.applicationContext).also { instance = it }
+
         /** 开始录制（由 UI 调用）。 */
         fun start(context: Context) {
-            val ctx = context.applicationContext
             instance?.stop()
-            val recorder = Recorder(ctx)
-            instance = recorder
+            val recorder = obtain(context)
             recorder.start()
         }
 
@@ -336,7 +393,11 @@ class Recorder(context: Context) {
         /** 停止录制（由 UI 调用）。 */
         fun stop(context: Context) {
             instance?.stop()
-            instance = null
+        }
+
+        /** 手动取点（由 UI 调用）。 */
+        fun pickPoint(context: Context) {
+            obtain(context).pickPoint()
         }
 
         fun isRecording(): Boolean = instance?.isRecording() == true

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -109,9 +110,10 @@ fun RecordingScreen(onBack: () -> Unit) {
                 onStart = { Recorder.start(context) },
                 onPause = { Recorder.pause(context) },
                 onStop = { Recorder.stop(context) },
+                onPick = { Recorder.pickPoint(context) },
             )
             Text(
-                text = "已录制 ${steps.size} 步",
+                text = "已录制 ${steps.size} 步 · 录制期间可正常操作目标 App（基于无障碍事件）",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
@@ -161,26 +163,34 @@ private fun RecordingControls(
     onStart: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
+    onPick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            text = "状态：${recordingLabel(recording)}",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f),
-        )
-        Button(onClick = onStart, enabled = recording == RecordingState.IDLE) { Text("开始") }
+    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "状态：${recordingLabel(recording)}",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = onStart, enabled = recording == RecordingState.IDLE) { Text("开始") }
+            OutlinedButton(
+                onClick = onPause,
+                enabled = recording != RecordingState.IDLE,
+            ) { Text(if (recording == RecordingState.PAUSED) "继续" else "暂停") }
+            OutlinedButton(
+                onClick = onStop,
+                enabled = recording != RecordingState.IDLE,
+            ) { Text("停止") }
+        }
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(
-            onClick = onPause,
-            enabled = recording != RecordingState.IDLE,
-        ) { Text(if (recording == RecordingState.PAUSED) "继续" else "暂停") }
-        OutlinedButton(
-            onClick = onStop,
-            enabled = recording != RecordingState.IDLE,
-        ) { Text("停止") }
+            onClick = onPick,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("手动取点（单击屏幕位置补一个点击步骤）") }
     }
 }
 
