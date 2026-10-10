@@ -19,7 +19,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import com.autoclicker.MainActivity
 import com.autoclicker.core.bus.LogEntry
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.PlaybackState
@@ -34,7 +33,6 @@ import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.service.capture.TemplateCaptureOverlay
 import com.autoclicker.service.record.Recorder
-import com.autoclicker.ui.EditorAction
 import com.autoclicker.ui.editor.actionSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +62,10 @@ class OverlayService : Service() {
 
     /** 悬浮球的窗口参数（拖动时原地更新，用于计算控制台位置避免重叠）。 */
     private var ballParams: WindowManager.LayoutParams? = null
+
+    /** 悬浮球上次被隐藏时的位置，重新显示时恢复到原位置（截图模式会临时隐藏球）。 */
+    private var lastBallX: Int? = null
+    private var lastBallY: Int? = null
 
     /** 自动缩小去重：记录上一次播放/录制状态，仅在「切入」RUNNING/RECORDING 时收起一次。 */
     private var lastPlaybackState: PlaybackState = PlaybackState.IDLE
@@ -137,6 +139,18 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            // App 内发起「截图建模板」时用：缩起悬浮球，避免被截进模板图。
+            ACTION_ENTER_CAPTURE -> {
+                enterCaptureMode()
+                return START_STICKY
+            }
+
+            ACTION_EXIT_CAPTURE -> {
+                exitCaptureMode()
+                return START_STICKY
+            }
+        }
         intent?.getStringExtra(EXTRA_SCRIPT_ID)?.let { pendingScriptId = it }
         showFloatingBall()
         // 带目标任务启动（首页「运行」入口）时先把该任务设为当前选中，长按悬浮球才会跑这个任务。
@@ -179,8 +193,8 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(12)
-            y = dp(160)
+            x = lastBallX ?: dp(12)
+            y = lastBallY ?: dp(160)
         }
         ball.setOnTouchListener(BallTouchListener(params))
         try {
@@ -199,6 +213,11 @@ class OverlayService : Service() {
         ballStateJob?.cancel()
         ballStateJob = null
         val view = ballView ?: return
+        // 记住位置，重新显示时回到原处。
+        ballParams?.let {
+            lastBallX = it.x
+            lastBallY = it.y
+        }
         ballView = null
         ballParams = null
         try {
@@ -290,6 +309,11 @@ class OverlayService : Service() {
     }
 
     private fun toggleConsole() {
+        // 任务编辑器是独立窗口，点悬浮球先收起编辑器（相当于「缩小」回只留球）。
+        if (OverlayStepEditor.isOpen()) {
+            OverlayStepEditor.close()
+            return
+        }
         if (consoleView == null) showConsole() else hideConsole()
     }
 
@@ -321,6 +345,8 @@ class OverlayService : Service() {
             RuntimeBus.log(LogLevel.WARN, "无悬浮窗权限，无法显示控制台")
             return
         }
+        // 编辑器占着屏幕时不要再叠一层控制台。
+        if (OverlayStepEditor.isOpen()) OverlayStepEditor.close()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(CONSOLE_BG)
@@ -447,6 +473,8 @@ class OverlayService : Service() {
         })
         recordRow.addView(button("+点击(取点)") {
             if (!PermissionChecker.requireOverlay(this)) return@button
+            // 取点要看清整屏：先收起控制台（取点层本身会盖住悬浮球）。
+            hideConsole()
             Recorder.pickPoint(this)
             RuntimeBus.log("控制台：进入取点模式")
         })
@@ -466,19 +494,21 @@ class OverlayService : Service() {
         taskEditRow.addView(button("新建步骤组") { promptNewGroup() })
         root.addView(taskEditRow)
 
-        // 截图建模板（悬浮窗内直接唤起截图裁剪层）
+        // 截图建模板（悬浮窗内直接唤起截图裁剪层）：先收起控制台并隐藏悬浮球，否则球会被截进模板图。
         val templateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         templateRow.addView(button("截图建模板") {
             if (!PermissionChecker.requireOverlay(this)) return@button
+            enterCaptureMode()
             TemplateCaptureOverlay.start(this) { template ->
+                exitCaptureMode()
                 if (template != null) RuntimeBus.log("控制台：已添加模板「${template.name}」")
             }
         })
         root.addView(templateRow)
 
-        // 任务步骤（可直接修改）
+        // 任务步骤（只读一览）
         root.addView(TextView(this).apply {
-            text = "任务步骤（可直接修改）"
+            text = "任务步骤（点「动作编辑」可直接改延时）"
             setTextColor(STEP_COLOR)
             textSize = 12f
         })
@@ -676,14 +706,14 @@ class OverlayService : Service() {
         }
     }
 
-    // ---------------- 任务步骤（可直接修改） ----------------
+    // ---------------- 任务步骤（只读一览，编辑走「动作编辑」） ----------------
 
     private fun rebuildSteps() {
         val container = stepsContainer ?: return
         container.removeAllViews()
         val nodes = RecordingSession.nodes.value
         if (nodes.isEmpty()) {
-            container.addView(smallText("（暂无任务步骤，点击「动作编辑」添加）"))
+            container.addView(smallText("（暂无任务步骤，点「动作编辑」添加）"))
             return
         }
         nodes.forEachIndexed { index, node ->
@@ -696,99 +726,53 @@ class OverlayService : Service() {
         is GroupNode -> groupRow(index, node)
     }
 
-    private fun stepRow(index: Int, step: StepNode): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        row.addView(TextView(this).apply {
-            text = "#${index + 1} ${actionSummary(step.action)}"
-            setTextColor(Color.WHITE)
-            textSize = 11f
-        })
-        val editRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        editRow.addView(button("延时-") { adjustDelay(step, -DELAY_STEP_MS) })
-        editRow.addView(valueText("${step.delayAfterMs}ms"))
-        editRow.addView(button("延时+") { adjustDelay(step, DELAY_STEP_MS) })
-        editRow.addView(button("次数-") { adjustRepeat(step, -1) })
-        editRow.addView(valueText("×${step.repeatCount}"))
-        editRow.addView(button("次数+") { adjustRepeat(step, 1) })
-        editRow.addView(button("删除") { RecordingSession.removeNode(step.id) })
-        editRow.addView(button("上移") { RecordingSession.moveNode(step.id, -1) })
-        editRow.addView(button("下移") { RecordingSession.moveNode(step.id, 1) })
-        row.addView(editRow)
-        return row
+    /** 只读展示：延时/次数在这里不再用加减按钮，改到「动作编辑」里直接输入。 */
+    private fun stepRow(index: Int, step: StepNode): View = TextView(this).apply {
+        text = "#${index + 1} ${actionSummary(step.action)}　延时${step.delayAfterMs}ms ×${step.repeatCount}"
+        setTextColor(Color.WHITE)
+        textSize = 11f
+        setPadding(0, dp(4), 0, dp(4))
     }
 
-    private fun groupRow(index: Int, group: GroupNode): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        row.addView(TextView(this).apply {
-            text = "#${index + 1} [组] ${group.name} ×${group.loopCount}"
-            setTextColor(GROUP_COLOR)
-            textSize = 11f
-        })
-        val editRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        editRow.addView(button("循环-") { adjustLoop(group, -1) })
-        editRow.addView(valueText("×${group.loopCount}"))
-        editRow.addView(button("循环+") { adjustLoop(group, 1) })
-        editRow.addView(button("删除") { RecordingSession.removeNode(group.id) })
-        editRow.addView(button("上移") { RecordingSession.moveNode(group.id, -1) })
-        editRow.addView(button("下移") { RecordingSession.moveNode(group.id, 1) })
-        row.addView(editRow)
-        return row
-    }
-
-    private fun adjustDelay(step: StepNode, delta: Long) {
-        val value = (step.delayAfterMs + delta).coerceAtLeast(0L)
-        RecordingSession.updateNode(step.copy(delayAfterMs = value))
-    }
-
-    private fun adjustRepeat(step: StepNode, delta: Int) {
-        val value = (step.repeatCount + delta).coerceAtLeast(1)
-        RecordingSession.updateNode(step.copy(repeatCount = value))
-    }
-
-    private fun adjustLoop(group: GroupNode, delta: Int) {
-        val value = (group.loopCount + delta).coerceAtLeast(1)
-        RecordingSession.updateNode(group.copy(loopCount = value))
+    private fun groupRow(index: Int, group: GroupNode): View = TextView(this).apply {
+        text = "#${index + 1} [组] ${group.name.ifBlank { "步骤组" }} ×${group.loopCount}（${group.children.size} 步）"
+        setTextColor(GROUP_COLOR)
+        textSize = 11f
+        setPadding(0, dp(4), 0, dp(4))
     }
 
     // ---------------- 任务编辑入口 ----------------
 
-    private fun promptRenameTask() = openEditorInApp(EditorAction.RENAME)
+    private fun promptRenameTask() = openOverlayEditor(OverlayStepEditor.Mode.RENAME)
 
-    private fun openTaskEditor() = openEditorInApp(EditorAction.NONE)
+    private fun openTaskEditor() = openOverlayEditor(OverlayStepEditor.Mode.LIST)
 
-    private fun promptNewGroup() = openEditorInApp(EditorAction.GROUP)
+    private fun promptNewGroup() = openOverlayEditor(OverlayStepEditor.Mode.GROUP)
 
-    /**
-     * 任务编辑统一交给 App 自己的编辑器页面（Activity + Compose）。
-     *
-     * 不再在悬浮窗里挂 ComposeView：这类窗口既拿不到输入焦点（无法输入文字），
-     * 在部分机型上一挂载就整进程崩掉（表现为悬浮球/App 自动退出）。
-     * 控制台只保留轻量改动（延时 / 次数 / 上下移 / 删除），重编辑一律跳编辑器。
-     */
-    private fun openEditorInApp(action: String) {
-        val scriptId = RecordingSession.scriptId.value
-        if (scriptId.isNullOrBlank()) {
+    /** 在悬浮窗内直接编辑（不跳转 App）：先收起控制台，避免两个窗口叠在一起。 */
+    private fun openOverlayEditor(mode: OverlayStepEditor.Mode) {
+        if (!RecordingSession.isActive) {
             Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
             return
         }
-        // 悬浮窗在 App 之上，不收起会挡住编辑器界面。
         hideConsole()
-        val intent = Intent(this, MainActivity::class.java)
-            .addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
-            )
-            .putExtra(MainActivity.EXTRA_EDITOR_SCRIPT_ID, scriptId)
-            .putExtra(MainActivity.EXTRA_EDITOR_ACTION, action)
-        runCatching { startActivity(intent) }
-            .onFailure { Toast.makeText(this, "打开编辑器失败：${it.message}", Toast.LENGTH_SHORT).show() }
+        OverlayStepEditor.open(this, mode)
+    }
+
+    // ---------------- 截图模式（自动缩小/隐藏悬浮球） ----------------
+
+    /**
+     * 进入截图模式：收起控制台并隐藏悬浮球。
+     * 悬浮窗会被截进屏幕采集结果，不收起的话模板里会带上悬浮球。
+     */
+    private fun enterCaptureMode() {
+        hideConsole()
+        hideFloatingBall()
+    }
+
+    /** 退出截图模式：恢复悬浮球（控制台保持收起，交给用户手动展开）。 */
+    private fun exitCaptureMode() {
+        showFloatingBall()
     }
 
     private fun renderLogs(logs: List<LogEntry>) {
@@ -822,14 +806,6 @@ class OverlayService : Service() {
         text = value
         setTextColor(Color.parseColor("#999999"))
         textSize = 11f
-    }
-
-    private fun valueText(value: String): TextView = TextView(this).apply {
-        text = value
-        setTextColor(Color.parseColor("#BBBBBB"))
-        textSize = 11f
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(4), 0, dp(4), 0)
     }
 
     private fun stateLabel(state: PlaybackState): String = when (state) {
@@ -871,15 +847,34 @@ class OverlayService : Service() {
         private const val LOG_VIEW_HEIGHT_DP = 150
         private const val STEPS_VIEW_HEIGHT_DP = 170
         private const val LOG_MAX_LINES = 120
-        private const val DELAY_STEP_MS = 100L
 
         private const val EXTRA_SCRIPT_ID = "script_id"
+        private const val ACTION_ENTER_CAPTURE = "enter_capture_mode"
+        private const val ACTION_EXIT_CAPTURE = "exit_capture_mode"
 
         /** 启动悬浮球；[scriptId] 用于把某个任务设为悬浮球当前选中（长按悬浮球即运行它）。 */
         fun start(context: Context, scriptId: String? = null) {
             val intent = Intent(context, OverlayService::class.java)
             if (!scriptId.isNullOrBlank()) intent.putExtra(EXTRA_SCRIPT_ID, scriptId)
             context.startService(intent)
+        }
+
+        /** App 内发起截图建模板前调用：收起控制台并隐藏悬浮球，避免悬浮窗被截进画面。 */
+        fun enterCaptureMode(context: Context) {
+            runCatching {
+                context.startService(
+                    Intent(context, OverlayService::class.java).setAction(ACTION_ENTER_CAPTURE),
+                )
+            }
+        }
+
+        /** 截图结束（成功或取消）后调用：恢复悬浮球。 */
+        fun exitCaptureMode(context: Context) {
+            runCatching {
+                context.startService(
+                    Intent(context, OverlayService::class.java).setAction(ACTION_EXIT_CAPTURE),
+                )
+            }
         }
 
         fun stop(context: Context) {

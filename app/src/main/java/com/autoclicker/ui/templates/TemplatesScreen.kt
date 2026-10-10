@@ -50,6 +50,7 @@ import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.ImageTemplate
 import com.autoclicker.service.capture.TemplateCaptureOverlay
+import com.autoclicker.service.overlay.OverlayService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -103,7 +104,10 @@ fun TemplatesScreen() {
                 )
                 OutlinedButton(onClick = capture@{
                     if (!PermissionChecker.requireOverlay(context)) return@capture
+                    // 截图前先收起悬浮窗，避免悬浮球被截进画面。
+                    OverlayService.enterCaptureMode(context)
                     TemplateCaptureOverlay.start(context) { template ->
+                        OverlayService.exitCaptureMode(context)
                         if (template != null) {
                             scope.launch { templates = ServiceLocator.templates.list() }
                         }

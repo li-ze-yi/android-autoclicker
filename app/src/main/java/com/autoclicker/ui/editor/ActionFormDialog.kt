@@ -69,6 +69,7 @@ import com.autoclicker.domain.model.ToastAction
 import com.autoclicker.domain.model.VarOp
 import com.autoclicker.domain.model.VariableOpAction
 import com.autoclicker.service.capture.TemplateCaptureOverlay
+import com.autoclicker.service.overlay.OverlayService
 
 /**
  * 动作参数表单对话框：以 [initial] 为模板编辑，确定时回调最终动作。
@@ -276,7 +277,10 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
         OutlinedButton(
             onClick = capture@{
                 if (!PermissionChecker.requireOverlay(context)) return@capture
+                // 截图前先收起悬浮窗，避免悬浮球被截进画面。
+                OverlayService.enterCaptureMode(context)
                 TemplateCaptureOverlay.start(context) { template ->
+                    OverlayService.exitCaptureMode(context)
                     if (template != null) {
                         extraTemplates = extraTemplates + template
                         templateId = template.id

@@ -88,6 +88,11 @@ object RecordingSession {
         _nodes.value = _nodes.value.filterNot { it.id == id }
     }
 
+    /** 整体替换顶层步骤（例如把选中的步骤并入步骤组后一次性写回）。 */
+    fun replaceNodes(nodes: List<ScriptNode>) {
+        _nodes.value = nodes
+    }
+
     /** 上/下移动步骤（delta = -1 上移，+1 下移）。 */
     fun moveNode(id: String, delta: Int) {
         val list = _nodes.value.toMutableList()
