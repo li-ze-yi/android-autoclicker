@@ -15,10 +15,13 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
+import android.widget.Toast
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.RecorderBus
+import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.ClickAction
 import com.autoclicker.domain.model.Ids
@@ -60,6 +63,7 @@ class Recorder(private val appContext: Context) {
     private var autoRecordDelay = true
 
     private var settingsScope: CoroutineScope? = null
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var badgeView: TextView? = null
     private var pickerView: View? = null
 
@@ -81,8 +85,12 @@ class Recorder(private val appContext: Context) {
 
     fun start() {
         if (recording) return
-        if (!hasOverlayPermission()) {
-            RuntimeBus.log(LogLevel.ERROR, "无法开始录制：缺少悬浮窗权限（用于显示录制角标）")
+        // 三重守卫：无障碍 → 悬浮窗 → 已绑定任务，任一不满足都不启动。
+        if (!PermissionChecker.requireAccessibility(appContext)) return
+        if (!PermissionChecker.requireOverlay(appContext)) return
+        if (!RecordingSession.isActive) {
+            Toast.makeText(appContext, "请先创建或打开一个任务，再开始录制", Toast.LENGTH_SHORT).show()
+            RuntimeBus.log(LogLevel.WARN, "无法开始录制：尚未绑定任务，请先在首页创建或打开一个任务")
             return
         }
         if (ServiceLocator.nodeLocator == null) {
@@ -121,6 +129,13 @@ class Recorder(private val appContext: Context) {
         settingsScope = null
         RuntimeBus.setRecording(RecordingState.IDLE)
         RuntimeBus.log("录制已结束")
+        // 停止录制后把这一轮的步骤写回任务；保持会话有效，用户可继续录第二轮。
+        saveScope.launch {
+            val ok = runCatching { RecordingSession.saveNow() }.getOrDefault(false)
+            if (ok) {
+                RuntimeBus.log("录制已保存到任务「${RecordingSession.scriptName.value}」")
+            }
+        }
     }
 
     // ---------------- 无障碍事件入口 ----------------

@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.FunctionPackage
@@ -63,6 +65,7 @@ import com.autoclicker.domain.model.TextGroup
 import com.autoclicker.domain.model.flattenSteps
 import com.autoclicker.domain.rule.StructureValidator
 import com.autoclicker.domain.rule.ValidationIssue
+import com.autoclicker.service.record.Recorder
 import kotlinx.coroutines.launch
 
 /**
@@ -73,6 +76,8 @@ import kotlinx.coroutines.launch
 fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val recordingScriptId by RecordingSession.scriptId.collectAsState()
+    val recordingScriptName by RecordingSession.scriptName.collectAsState()
 
     var script by remember { mutableStateOf<Script?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -135,6 +140,36 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    val recordingThis = recordingScriptId == scriptId
+                    TextButton(
+                        onClick = {
+                            if (recordingThis) {
+                                Recorder.stop(context)
+                                scope.launch {
+                                    RecordingSession.finish()
+                                    script = runCatching { ServiceLocator.scripts.get(scriptId) }
+                                        .getOrNull() ?: script
+                                    val suffix = recordingScriptName?.let { "：$it" } ?: ""
+                                    toast("已停止录制并保存$suffix")
+                                }
+                            } else {
+                                val s = script
+                                if (s == null) {
+                                    toast("脚本未加载")
+                                } else {
+                                    scope.launch {
+                                        val saved = s.copy(updatedAt = System.currentTimeMillis())
+                                        runCatching { ServiceLocator.scripts.save(saved) }
+                                            .onFailure { toast("保存失败：${it.message}") }
+                                        script = saved
+                                        RecordingSession.begin(saved)
+                                        Recorder.start(context)
+                                        toast("已开始录制到本任务")
+                                    }
+                                }
+                            }
+                        },
+                    ) { Text(if (recordingThis) "停止录制并保存" else "录制到本任务") }
                     TextButton(onClick = save) { Text("保存") }
                 },
             )

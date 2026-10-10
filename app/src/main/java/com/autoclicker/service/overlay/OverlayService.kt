@@ -18,10 +18,12 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.autoclicker.core.bus.LogEntry
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.PlaybackState
 import com.autoclicker.core.bus.RecorderBus
+import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
@@ -76,6 +78,7 @@ class OverlayService : Service() {
     private var logsScroll: ScrollView? = null
     private var stepsContainer: LinearLayout? = null
     private var recordStateText: TextView? = null
+    private var recordTaskText: TextView? = null
     private var startButton: Button? = null
     private var pauseButton: Button? = null
     private var stopButton: Button? = null
@@ -90,6 +93,7 @@ class OverlayService : Service() {
     private var stepJob: Job? = null
     private var recordJob: Job? = null
     private var recorderStepsJob: Job? = null
+    private var recordTaskJob: Job? = null
     private var ballStateJob: Job? = null
 
     private lateinit var controller: OverlayControllerImpl
@@ -405,8 +409,20 @@ class OverlayService : Service() {
         recordStateText = recordState
         root.addView(recordState)
 
+        val recordTask = TextView(this).apply {
+            setTextColor(RECORD_COLOR)
+            textSize = 12f
+            text = recordTaskLabel()
+        }
+        recordTaskText = recordTask
+        root.addView(recordTask)
+
         val recordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val record = button("录制") {
+            if (!RecordingSession.isActive) {
+                Toast.makeText(this, "请先创建或打开一个任务，再开始录制", Toast.LENGTH_SHORT).show()
+                return@button
+            }
             if (!PermissionChecker.requireAccessibility(this)) return@button
             if (Recorder.isRecording()) Recorder.stop(this) else Recorder.start(this)
             RuntimeBus.log(if (Recorder.isRecording()) "控制台：录制开始" else "控制台：录制停止")
@@ -417,12 +433,21 @@ class OverlayService : Service() {
             if (!PermissionChecker.requireAccessibility(this)) return@button
             if (Recorder.isRecording()) Recorder.pause(this)
         })
-        recordRow.addView(button("取点") {
+        recordRow.addView(button("+点击(取点)") {
             if (!PermissionChecker.requireOverlay(this)) return@button
             Recorder.pickPoint(this)
             RuntimeBus.log("控制台：进入取点模式")
         })
         root.addView(recordRow)
+
+        val saveRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        saveRow.addView(button("保存到任务") {
+            scope.launch {
+                val ok = runCatching { RecordingSession.saveNow() }.getOrDefault(false)
+                if (ok) RuntimeBus.log("控制台：已保存到任务")
+            }
+        })
+        root.addView(saveRow)
 
         // 截图建模板（悬浮窗内直接唤起截图裁剪层）
         val templateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -495,6 +520,7 @@ class OverlayService : Service() {
         stepJob?.cancel(); stepJob = null
         recordJob?.cancel(); recordJob = null
         recorderStepsJob?.cancel(); recorderStepsJob = null
+        recordTaskJob?.cancel(); recordTaskJob = null
         val view = consoleView ?: return
         consoleView = null
         stateText = null
@@ -503,6 +529,7 @@ class OverlayService : Service() {
         logsScroll = null
         stepsContainer = null
         recordStateText = null
+        recordTaskText = null
         startButton = null
         pauseButton = null
         stopButton = null
@@ -623,6 +650,9 @@ class OverlayService : Service() {
         recorderStepsJob = scope.launch {
             RecorderBus.steps.collect { rebuildSteps() }
         }
+        recordTaskJob = scope.launch {
+            RecordingSession.scriptName.collect { recordTaskText?.text = recordTaskLabel() }
+        }
     }
 
     // ---------------- 步骤列表（可直接修改） ----------------
@@ -730,6 +760,9 @@ class OverlayService : Service() {
         RecordingState.RECORDING -> "录制中"
         RecordingState.PAUSED -> "已暂停"
     }
+
+    private fun recordTaskLabel(): String =
+        "录制任务：${RecordingSession.scriptName.value ?: "未绑定（请先在首页新建任务）"}"
 
     private fun summarize(action: Action): String = when (action) {
         is ClickAction -> "点击 (${fmt(action.point.x)}, ${fmt(action.point.y)})"

@@ -1,5 +1,6 @@
 package com.autoclicker.ui.record
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,9 +9,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -41,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.autoclicker.core.bus.RecorderBus
+import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
@@ -73,11 +77,19 @@ import kotlinx.coroutines.launch
 fun RecordingScreen(onBack: () -> Unit) {
     val steps by RecorderBus.steps.collectAsState()
     val recording by RuntimeBus.recording.collectAsState()
+    val boundScriptName by RecordingSession.scriptName.collectAsState()
     val scope = rememberCoroutineScope()
     val context = ServiceLocator.context
 
-    var showSaveDialog by remember { mutableStateOf(false) }
-    var saveName by remember { mutableStateOf("") }
+    var showNewDialog by remember { mutableStateOf(false) }
+    var newTaskName by remember { mutableStateOf("") }
+    var showPickDialog by remember { mutableStateOf(false) }
+    var scriptList by remember { mutableStateOf<List<Script>>(emptyList()) }
+    var listLoading by remember { mutableStateOf(false) }
+
+    val toast: (String) -> Unit = { msg ->
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
 
     Scaffold(
         topBar = {
@@ -98,19 +110,59 @@ fun RecordingScreen(onBack: () -> Unit) {
         bottomBar = {
             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                 Button(
-                    onClick = { showSaveDialog = true },
+                    onClick = {
+                        scope.launch {
+                            val ok = RecordingSession.saveNow()
+                            toast(if (ok) "已保存到任务" else "未绑定任务或保存失败")
+                        }
+                    },
                     enabled = steps.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("保存为任务") }
+                ) { Text("保存到任务") }
             }
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            Text(
+                text = "录制任务：${boundScriptName ?: "未绑定任务"}",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+            )
+            if (boundScriptName == null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            newTaskName = ""
+                            showNewDialog = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("新建任务并录制") }
+                    OutlinedButton(
+                        onClick = {
+                            showPickDialog = true
+                            listLoading = true
+                            scope.launch {
+                                scriptList = runCatching { ServiceLocator.scripts.list() }
+                                    .getOrDefault(emptyList())
+                                listLoading = false
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("选择已有任务") }
+                }
+            }
             RecordingControls(
                 recording = recording,
                 onStart = start@{
                     if (!PermissionChecker.requireAccessibility(context)) return@start
                     if (!PermissionChecker.requireOverlay(context)) return@start
+                    if (!RecordingSession.isActive) {
+                        toast("请先创建或选择任务")
+                        return@start
+                    }
                     Recorder.start(context)
                 },
                 onPause = { Recorder.pause(context) },
@@ -121,7 +173,7 @@ fun RecordingScreen(onBack: () -> Unit) {
                 },
             )
             Text(
-                text = "已录制 ${steps.size} 步 · 录制期间可正常操作目标 App（基于无障碍事件）",
+                text = "已录制 ${steps.size} 步 · 录制期间可正常操作目标 App，步骤会自动保存到当前任务",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
@@ -137,29 +189,65 @@ fun RecordingScreen(onBack: () -> Unit) {
         }
     }
 
-    if (showSaveDialog) {
+    if (showNewDialog) {
         AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
-            title = { Text("保存为任务") },
+            onDismissRequest = { showNewDialog = false },
+            title = { Text("新建任务并录制") },
             text = {
                 OutlinedTextField(
-                    value = saveName,
-                    onValueChange = { saveName = it },
+                    value = newTaskName,
+                    onValueChange = { newTaskName = it },
                     label = { Text("任务名称") },
                     singleLine = true,
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val name = saveName.trim().ifBlank { "录制任务" }
-                    val script = Script(id = Ids.newId(), name = name, nodes = steps)
-                    scope.launch { ServiceLocator.scripts.save(script) }
-                    showSaveDialog = false
-                    onBack()
-                }) { Text("保存") }
+                    val name = newTaskName.trim().ifBlank { "录制任务" }
+                    val script = Script(id = Ids.newId(), name = name)
+                    showNewDialog = false
+                    scope.launch {
+                        runCatching { ServiceLocator.scripts.save(script) }
+                            .onFailure { toast("创建任务失败：${it.message}") }
+                        RecordingSession.begin(script)
+                        toast("已绑定任务：$name")
+                    }
+                }) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) { Text("取消") }
+                TextButton(onClick = { showNewDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showPickDialog) {
+        AlertDialog(
+            onDismissRequest = { showPickDialog = false },
+            title = { Text("选择已有任务") },
+            text = {
+                if (listLoading) {
+                    Text("加载中…")
+                } else if (scriptList.isEmpty()) {
+                    Text("暂无任务，请先新建任务")
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                        items(scriptList, key = { it.id }) { script ->
+                            TextButton(
+                                onClick = {
+                                    RecordingSession.begin(script)
+                                    showPickDialog = false
+                                    toast("已绑定任务：${script.name}")
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(script.name, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPickDialog = false }) { Text("关闭") }
             },
         )
     }
