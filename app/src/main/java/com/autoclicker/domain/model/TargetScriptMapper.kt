@@ -15,6 +15,9 @@ object TargetScriptMapper {
     /** 滑动目标之间的默认间隔（毫秒） */
     const val SWIPE_TARGET_GAP_MS: Long = 100L
 
+    /** 长按判定阈值（毫秒，平台通用长按超时约 500ms） */
+    const val LONG_PRESS_THRESHOLD_MS: Long = 500L
+
     /**
      * @param scriptId 生成脚本的 ID
      * @param name 脚本名称
@@ -35,8 +38,15 @@ object TargetScriptMapper {
             when (target) {
                 is TargetSpec.TapTarget -> {
                     val repeats = target.repeats.coerceAtLeast(1)
-                    repeat(repeats) { i ->
-                        steps += ScriptStep.BasicStep(nextId(), Action.Tap(target.x, target.y))
+                    // I6 修复：触摸时长生效——达到长按阈值映射为 LongPress，否则携带 holdMs 的 Tap
+                    val pressAction: Action =
+                        if (target.holdMs >= LONG_PRESS_THRESHOLD_MS) {
+                            Action.LongPress(target.x, target.y, target.holdMs)
+                        } else {
+                            Action.Tap(target.x, target.y, target.holdMs.coerceAtLeast(1L))
+                        }
+                    repeat(repeats) {
+                        steps += ScriptStep.BasicStep(nextId(), pressAction)
                         // 每次点击后按间隔等待（最后一次点击也等待，与下一个目标拉开间隔）
                         steps += ScriptStep.BasicStep(nextId(), Action.Delay(target.intervalMs.coerceAtLeast(0)))
                     }

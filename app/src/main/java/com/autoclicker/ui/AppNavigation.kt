@@ -79,6 +79,11 @@ fun AppNavigation() {
                             launchSingleTop = true
                         }
                     },
+                    onNavigateToTemplates = {
+                        navController.navigate(Routes.VISION_TEMPLATES) {
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
             composable(Routes.SCRIPTS) {

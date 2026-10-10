@@ -160,7 +160,8 @@ class ScriptPlayer(
     ) {
         when (action) {
             is Action.Tap ->
-                gestureExecutor.tap(action.x, action.y).requireCompleted("点击(${action.x}, ${action.y})")
+                gestureExecutor.tap(action.x, action.y, holdMs = action.holdMs.coerceAtLeast(1L))
+                    .requireCompleted("点击(${action.x}, ${action.y})")
 
             is Action.LongPress ->
                 gestureExecutor.longPress(action.x, action.y, action.durationMs)

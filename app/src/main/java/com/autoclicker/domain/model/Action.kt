@@ -29,12 +29,15 @@ data class Rect(
 @Serializable
 sealed interface Action {
 
-    /** 点按：在 (x, y) 处单击一次 */
+    /**
+     * 点按：在 (x, y) 处单击；[holdMs] 为按下时长（快速点击=1ms，调大可模拟短按）。
+     */
     @Serializable
     @SerialName("Tap")
     data class Tap(
         val x: Int,
         val y: Int,
+        val holdMs: Long = 1L,
     ) : Action
 
     /** 长按：在 (x, y) 处长按 [durationMs] 毫秒（对应 FR-4） */

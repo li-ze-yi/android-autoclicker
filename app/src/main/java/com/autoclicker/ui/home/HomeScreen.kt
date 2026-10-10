@@ -40,6 +40,10 @@ import kotlinx.coroutines.flow.collectLatest
 import android.widget.Toast
 import androidx.compose.material3.MaterialTheme.colorScheme
 
+/** 首次启动引导的轻量存储键 */
+private const val ONBOARDING_PREFS = "autoclicker_onboarding"
+private const val KEY_ONBOARDING_DONE = "onboarding_done"
+
 /**
  * 首页：单目标/多目标配置 + 重复策略 + 悬浮窗与播放控制。
  */
@@ -48,6 +52,7 @@ fun HomeScreen(
     onNavigateToPermissions: () -> Unit,
     onNavigateToRecording: () -> Unit,
     onNavigateToTriggers: () -> Unit,
+    onNavigateToTemplates: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -73,6 +78,15 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         app.bus.eventMessages.collectLatest { msg ->
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // I9：首次启动且必要权限未齐时，引导进入权限页（仅一次，onboarding 标记持久化）
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences(ONBOARDING_PREFS, android.content.Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(KEY_ONBOARDING_DONE, false)) {
+            prefs.edit().putBoolean(KEY_ONBOARDING_DONE, true).apply()
+            if (!state.permissionsReady) onNavigateToPermissions()
         }
     }
 
@@ -162,6 +176,12 @@ fun HomeScreen(
             onClick = onNavigateToTriggers,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("定时任务") }
+
+        // 识图模板入口（AC-8 链路可达性）
+        OutlinedButton(
+            onClick = onNavigateToTemplates,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("识图模板") }
     }
 }
 

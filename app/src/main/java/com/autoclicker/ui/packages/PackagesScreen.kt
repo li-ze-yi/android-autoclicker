@@ -54,9 +54,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.autoclicker.core.data.packages.AlwaysFalseReferenceChecker
 import com.autoclicker.core.data.packages.FunctionPackageRepository
 import com.autoclicker.core.data.packages.ReferenceChecker
+import com.autoclicker.core.data.scripts.ScriptFileRepository
 import com.autoclicker.domain.model.FunctionPackage
 import com.autoclicker.domain.model.ScriptStep
 import kotlinx.coroutines.Dispatchers
@@ -87,12 +87,15 @@ fun PackagesScreen(modifier: Modifier = Modifier) {
         factory = remember(appContext) {
             object : ViewModelProvider.Factory {
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    // 默认引用检查器恒返回 false；Task 12 在此处替换为真实实现
                     val repository = FunctionPackageRepository(appContext)
+                    // 真实引用检查器：扫描全部脚本步骤树中的 PackageCall（删除保护）
+                    val referenceChecker = ScriptsReferenceChecker(
+                        scriptRepository = ScriptFileRepository(appContext),
+                    )
                     @Suppress("UNCHECKED_CAST")
                     return PackagesViewModel(
                         repository = repository,
-                        referenceChecker = AlwaysFalseReferenceChecker,
+                        referenceChecker = referenceChecker,
                     ) as T
                 }
             }
@@ -394,12 +397,12 @@ sealed interface PackagesIntent {
  * 函数包列表页 ViewModel：持有单一 [PackagesUiState]，所有 IO 操作经 viewModelScope 发起。
  *
  * @param repository 函数包文件仓库
- * @param referenceChecker 删除引用检查；默认 [AlwaysFalseReferenceChecker]，
- *        Task 12 接入真实实现（扫描全部脚本中的 PackageCall）
+ * @param referenceChecker 删除引用检查；由页面工厂注入真实实现
+ *        [ScriptsReferenceChecker]（扫描全部脚本步骤树中的 PackageCall）
  */
 class PackagesViewModel(
     private val repository: FunctionPackageRepository,
-    private val referenceChecker: ReferenceChecker = AlwaysFalseReferenceChecker,
+    private val referenceChecker: ReferenceChecker,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PackagesUiState())
@@ -571,8 +574,50 @@ class PackagesViewModel(
 }
 
 // =================================================================================
+// 删除保护：真实引用检查器
+// =================================================================================
+
+/**
+ * 基于脚本文件仓库的真实引用检查器（删除保护，FR-6B / AC-16）。
+ *
+ * 扫描全部脚本的步骤树（含 [ScriptStep.LoopGroup] 任意嵌套）中的
+ * [ScriptStep.PackageCall]，只要任一脚本以相同 packageId 调用目标函数包，
+ * 即判定为被引用、阻止删除。
+ *
+ * 注意：[isReferenced] 为阻塞式实现（内部以 runBlocking 读脚本文件），
+ * 调用方必须在 [Dispatchers.IO] 上调用——PackagesViewModel 的两处调用点
+ * （requestDelete / confirmDelete）均已按此约定包在 withContext(Dispatchers.IO) 内。
+ */
+private class ScriptsReferenceChecker(
+    private val scriptRepository: ScriptFileRepository,
+) : ReferenceChecker {
+
+    override fun isReferenced(packageId: String): Boolean {
+        // 阻塞调用：UI 已在 Dispatchers.IO 内调用本方法；
+        // 读取失败（如目录/文件异常）时保守视为未引用，避免误锁死删除入口
+        val scripts = runCatching {
+            kotlinx.coroutines.runBlocking { scriptRepository.list() }
+        }.getOrNull() ?: return false
+        return scripts.any { script -> containsCall(script.steps, packageId) }
+    }
+}
+
+// =================================================================================
 // 工具
 // =================================================================================
+
+/**
+ * 递归判断步骤树中是否存在对指定函数包的调用：
+ * BasicStep 无引用；LoopGroup 递归其内部 steps；PackageCall 比较 packageId。
+ */
+private fun containsCall(steps: List<ScriptStep>, packageId: String): Boolean =
+    steps.any { step ->
+        when (step) {
+            is ScriptStep.BasicStep -> false
+            is ScriptStep.LoopGroup -> containsCall(step.steps, packageId)
+            is ScriptStep.PackageCall -> step.packageId == packageId
+        }
+    }
 
 /**
  * 统计步骤总数：顶层步骤各计 1，循环段内的嵌套步骤递归计入；

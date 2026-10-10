@@ -26,11 +26,19 @@ class RecordingViewModel(
     val engineState: StateFlow<EngineState> = app.bus.engineState
 
     fun addGlobalHome() {
-        app.recorder.recordRawAction(Action.GlobalHome, System.currentTimeMillis())
+        // S2 修复：必须与手势事件的 eventTime（uptimeMillis 基准）一致，
+        // 传墙钟时间会算出约 53 年的超长延时。
+        app.recorder.recordRawAction(
+            Action.GlobalHome,
+            android.os.SystemClock.uptimeMillis(),
+        )
     }
 
     fun addGlobalBack() {
-        app.recorder.recordRawAction(Action.GlobalBack, System.currentTimeMillis())
+        app.recorder.recordRawAction(
+            Action.GlobalBack,
+            android.os.SystemClock.uptimeMillis(),
+        )
     }
 
     fun removeStep(stepId: String) = app.recorder.removeStep(stepId)

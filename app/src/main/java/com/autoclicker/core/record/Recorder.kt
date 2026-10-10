@@ -94,9 +94,25 @@ class Recorder {
         _steps.value = newSteps
     }
 
-    /** 删除一条步骤（时间轴单选删除） */
+    /**
+     * 删除一条步骤（时间轴单选删除）。
+     * I8 修复：删除手势步骤时一并移除紧随其后的自动延时，避免留下孤立 Delay。
+     */
     fun removeStep(stepId: String) {
-        _steps.value = _steps.value.filterNot { it.id == stepId }
+        val list = _steps.value
+        val idx = list.indexOfFirst { it.id == stepId }
+        if (idx < 0) return
+        val removedAction = (list[idx] as? ScriptStep.BasicStep)?.action
+
+        val newList = list.toMutableList()
+        newList.removeAt(idx)
+        if (removedAction != null && removedAction !is Action.Delay) {
+            val next = newList.getOrNull(idx)
+            if ((next as? ScriptStep.BasicStep)?.action is Action.Delay) {
+                newList.removeAt(idx)
+            }
+        }
+        _steps.value = newList
     }
 
     /**

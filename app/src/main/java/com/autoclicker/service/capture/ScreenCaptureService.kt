@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resume
 
 /**
  * 屏幕采集前台服务（FR-7，Task 10）。
@@ -224,6 +225,14 @@ class ScreenCaptureService : Service() {
         withTimeout(FRAME_TIMEOUT_MS) { firstFrame.await() }
         // 稳定期：等合成器再刷若干帧，避开首帧黑屏/半合成帧
         delay(FRAME_SETTLE_MS)
+
+        // S4 修复：先注销帧回调，并在 handler 上设置屏障等待「在飞回调」结束。
+        // 此后生产者线程不会再产出/回收帧，交付的 bitmap 不会被 use-after-recycle。
+        reader.setOnImageAvailableListener(null, handler)
+        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+            handler.post { if (cont.isActive) cont.resume(Unit) }
+        }
+
         val bitmap = latestBitmap.get()
             ?: throw CaptureException("屏幕画面为空，请重试")
         auth.result.takeIf { it.isActive }?.complete(bitmap)

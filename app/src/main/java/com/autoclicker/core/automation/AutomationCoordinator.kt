@@ -2,6 +2,7 @@ package com.autoclicker.core.automation
 
 import com.autoclicker.MyApplication
 import com.autoclicker.core.data.templates.ImageTemplateRepository
+import com.autoclicker.core.data.packages.FunctionPackageRepository
 import com.autoclicker.core.engine.GestureExecutor
 import com.autoclicker.core.engine.ImageWaiter
 import com.autoclicker.core.engine.PackageResolver
@@ -41,7 +42,7 @@ class AutomationCoordinator(private val app: MyApplication) {
 
     private val player = ScriptPlayer(
         gestureExecutor = gestureExecutor,
-        packageResolver = packageResolver,
+        packageResolver = createPackageResolver(app),
         imageWaiter = imageWaiter,
         globalActions = com.autoclicker.service.accessibility.AndroidGlobalActions(),
     )
@@ -84,6 +85,9 @@ class AutomationCoordinator(private val app: MyApplication) {
                 player.play(script, playbackControl)
             } catch (e: PlaybackException) {
                 app.bus.publishEvent(e.message ?: "执行失败")
+            } catch (e: com.autoclicker.core.bus.AutomationCommandException) {
+                // 例如录制中/已有任务运行时被再次启动：给中文提示而非崩溃
+                app.bus.publishEvent(e.message ?: "无法启动，请先停止当前任务")
             } finally {
                 playbackControl.resume()
                 if (app.bus.engineState.value != com.autoclicker.core.bus.EngineState.Idle) {
@@ -120,6 +124,16 @@ class AutomationCoordinator(private val app: MyApplication) {
      */
     fun beginRecording(mode: com.autoclicker.core.bus.RecordMode) {
         app.recorder.begin(mode)
+        // S3 修复：精确模式的触摸捕获层由 OverlayService 监听状态挂载，
+        // 必须先确保悬浮窗服务运行，否则进入 Recording 后无任何通道捕获触摸。
+        if (mode == com.autoclicker.core.bus.RecordMode.Precise) {
+            runCatching {
+                com.autoclicker.service.overlay.OverlayService.start(
+                    app,
+                    com.autoclicker.service.overlay.OverlayService.MODE_MULTI,
+                )
+            }
+        }
         scope.launch { runCatching { app.bus.startRecording(mode) } }
     }
 
@@ -141,6 +155,8 @@ class AutomationCoordinator(private val app: MyApplication) {
                 player.play(script, playbackControl)
             } catch (e: PlaybackException) {
                 app.bus.publishEvent(e.message ?: "执行失败")
+            } catch (e: com.autoclicker.core.bus.AutomationCommandException) {
+                app.bus.publishEvent(e.message ?: "无法启动，请先停止当前任务")
             } finally {
                 playbackControl.resume()
                 if (app.bus.engineState.value != com.autoclicker.core.bus.EngineState.Idle) {
@@ -164,6 +180,8 @@ class AutomationCoordinator(private val app: MyApplication) {
 private val gestureExecutor: GestureExecutor
     get() = com.autoclicker.service.accessibility.AndroidGestureExecutor()
 
-private val packageResolver: PackageResolver
-    // 函数包仓库在 Task 12A 接入；此前调用包步骤会在引擎内报"函数包不存在"
-    get() = PackageResolver { null }
+/** I1 修复：按 ID 实时读取函数包仓库（单一数据源） */
+private fun createPackageResolver(app: MyApplication): PackageResolver =
+    PackageResolver { id ->
+        FunctionPackageRepository(app).get(id)
+    }

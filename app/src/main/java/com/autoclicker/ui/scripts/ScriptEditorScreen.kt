@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -34,15 +36,19 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -65,8 +71,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.autoclicker.MyApplication
 import com.autoclicker.core.data.packages.FunctionPackageRepository
 import com.autoclicker.core.data.scripts.ScriptFileRepository
+import com.autoclicker.core.data.templates.ImageTemplateMetadata
+import com.autoclicker.core.data.templates.ImageTemplateRepository
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.FunctionPackage
+import com.autoclicker.domain.model.Rect
 import com.autoclicker.domain.model.RepeatPolicy
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptStep
@@ -113,6 +122,7 @@ fun ScriptEditorScreen(
                         scriptId = scriptId,
                         scriptRepository = ScriptFileRepository(app),
                         packageRepository = FunctionPackageRepository(app),
+                        templateRepository = ImageTemplateRepository(app),
                     ) as T
                 }
             }
@@ -327,6 +337,7 @@ private fun EditorScaffold(
             ActionFormDialog(
                 title = "添加动作",
                 initial = dialog.action,
+                templates = state.templates,
                 onConfirm = { onIntent(EditorIntent.AddStep(it)) },
                 onDismiss = { onIntent(EditorIntent.DismissDialog) },
             )
@@ -335,6 +346,7 @@ private fun EditorScaffold(
             ActionFormDialog(
                 title = "编辑动作",
                 initial = dialog.action,
+                templates = state.templates,
                 onConfirm = { onIntent(EditorIntent.UpdateAction(dialog.stepId, it)) },
                 onDismiss = { onIntent(EditorIntent.DismissDialog) },
             )
@@ -462,6 +474,18 @@ private fun AddActionBar(onIntent: (EditorIntent) -> Unit) {
                     onClick = {
                         expanded = false
                         onIntent(EditorIntent.OpenCreate(Action.Delay(durationMs = 500)))
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("等待识图") },
+                    onClick = {
+                        expanded = false
+                        // templateId 先留空，由表单下拉选择；默认超时 5 秒、全屏、找到后点击
+                        onIntent(
+                            EditorIntent.OpenCreate(
+                                Action.WaitImage(templateId = "", timeoutMs = DEFAULT_WAIT_TIMEOUT_MS)
+                            )
+                        )
                     },
                 )
                 DropdownMenuItem(
@@ -639,6 +663,9 @@ private fun StepRowItem(
 // 表单弹窗
 // =================================================================================
 
+/** 新建 WaitImage 的默认超时：5 秒 */
+private const val DEFAULT_WAIT_TIMEOUT_MS: Int = 5000
+
 /**
  * 动作参数表单弹窗：按 [initial] 的实际类型渲染对应数字字段。
  * - Tap：x、y
@@ -646,12 +673,15 @@ private fun StepRowItem(
  * - Swipe：起点/终点坐标、时长 ms
  * - Delay：时长 ms
  * - GlobalHome/GlobalBack：无可编辑参数，确认原样返回
- * - WaitImage：本期不支持在编辑器中修改，确认原样返回
+ * - WaitImage：模板下拉、超时秒数、相似度、可选区域、找到后是否点击
+ *
+ * @param templates 识图模板列表（WaitImage 表单下拉数据源，ViewModel 进页面时加载）
  */
 @Composable
 private fun ActionFormDialog(
     title: String,
     initial: Action,
+    templates: List<ImageTemplateMetadata>,
     onConfirm: (Action) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -683,12 +713,81 @@ private fun ActionFormDialog(
     var y2 by remember(initial) { mutableStateOf(seedY2?.toString() ?: "") }
     var duration by remember(initial) { mutableStateOf(seedDuration?.toString() ?: "") }
 
+    // ---- WaitImage 专用字段种子（仅 WaitImage 时有意义）----
+    val seedWaitImage = initial as? Action.WaitImage
+    var wiTemplateId by remember(initial) {
+        mutableStateOf(seedWaitImage?.templateId ?: "")
+    }
+    // 表单按「秒」编辑，存储时 ×1000
+    var wiTimeoutSec by remember(initial) {
+        mutableStateOf(
+            seedWaitImage?.let { (it.timeoutMs / 1000).toString() } ?: "5"
+        )
+    }
+    var wiSimilarity by remember(initial) {
+        mutableStateOf(
+            seedWaitImage?.similarity?.toString() ?: Action.DEFAULT_SIMILARITY.toString()
+        )
+    }
+    // 全屏复选框：region == null 时勾选（新建默认勾选）
+    var wiFullscreen by remember(initial) {
+        mutableStateOf(seedWaitImage?.region == null)
+    }
+    var wiRegionX by remember(initial) {
+        mutableStateOf(seedWaitImage?.region?.left?.toString() ?: "")
+    }
+    var wiRegionY by remember(initial) {
+        mutableStateOf(seedWaitImage?.region?.top?.toString() ?: "")
+    }
+    var wiRegionW by remember(initial) {
+        mutableStateOf(
+            seedWaitImage?.region?.let { (it.right - it.left).toString() } ?: ""
+        )
+    }
+    var wiRegionH by remember(initial) {
+        mutableStateOf(
+            seedWaitImage?.region?.let { (it.bottom - it.top).toString() } ?: ""
+        )
+    }
+    var wiTapWhenFound by remember(initial) {
+        mutableStateOf(seedWaitImage?.tapWhenFound ?: true)
+    }
+
     // 实时解析
     val px = x.toIntOrNull()
     val py = y.toIntOrNull()
     val px2 = x2.toIntOrNull()
     val py2 = y2.toIntOrNull()
     val pDuration = duration.toLongOrNull()
+
+    // WaitImage 实时解析
+    val pWiTimeoutSec = wiTimeoutSec.toIntOrNull()
+    val pWiSimilarity = wiSimilarity.toDoubleOrNull()
+    val pWiX = wiRegionX.toIntOrNull()
+    val pWiY = wiRegionY.toIntOrNull()
+    val pWiW = wiRegionW.toIntOrNull()
+    val pWiH = wiRegionH.toIntOrNull()
+
+    /**
+     * WaitImage 校验，返回第一条中文错误提示；null 表示全部通过。
+     * 规则：必须选择已存在模板；超时秒数 >=1；相似度 0..1；
+     * 非全屏时起始坐标非负、宽高 >0。
+     */
+    val wiError: String? = when {
+        seedWaitImage == null -> null
+        templates.isEmpty() -> "请先到识图模板页创建模板"
+        wiTemplateId.isBlank() || templates.none { it.id == wiTemplateId } ->
+            "请选择识图模板"
+        pWiTimeoutSec == null || pWiTimeoutSec < 1 ->
+            "超时秒数必须 ≥ 1"
+        pWiSimilarity == null || pWiSimilarity < 0.0 || pWiSimilarity > 1.0 ->
+            "相似度必须在 0~1 之间"
+        !wiFullscreen && (pWiX == null || pWiY == null || pWiX < 0 || pWiY < 0) ->
+            "区域起始坐标必须为非负整数"
+        !wiFullscreen && (pWiW == null || pWiH == null || pWiW <= 0 || pWiH <= 0) ->
+            "区域宽高必须为正整数（大于 0）"
+        else -> null
+    }
 
     val valid = when (initial) {
         is Action.Tap -> px != null && px >= 0 && py != null && py >= 0
@@ -702,7 +801,7 @@ private fun ActionFormDialog(
         is Action.Delay -> pDuration != null && pDuration >= 0
         Action.GlobalHome -> true
         Action.GlobalBack -> true
-        is Action.WaitImage -> true
+        is Action.WaitImage -> wiError == null
     }
 
     AlertDialog(
@@ -736,7 +835,38 @@ private fun ActionFormDialog(
                     Action.GlobalHome -> Text("Home 键动作没有可编辑参数。")
                     Action.GlobalBack -> Text("返回键动作没有可编辑参数。")
                     is Action.WaitImage ->
-                        Text("识图动作参数暂不支持在脚本编辑器中修改，请通过录制或导入生成。")
+                        WaitImageFormFields(
+                            templates = templates,
+                            selectedTemplateId = wiTemplateId,
+                            onTemplateSelect = { wiTemplateId = it },
+                            timeoutSec = wiTimeoutSec,
+                            onTimeoutChange = { raw ->
+                                wiTimeoutSec = raw.filter { it.isDigit() }
+                            },
+                            similarity = wiSimilarity,
+                            onSimilarityChange = { raw ->
+                                // 仅保留数字与小数点，且最多一个小数点
+                                val filtered = raw.filter { it.isDigit() || it == '.' }
+                                wiSimilarity = if (filtered.count { it == '.' } > 1) {
+                                    filtered.substringBeforeLast('.')
+                                } else {
+                                    filtered
+                                }
+                            },
+                            fullscreen = wiFullscreen,
+                            onFullscreenChange = { wiFullscreen = it },
+                            regionX = wiRegionX,
+                            regionY = wiRegionY,
+                            regionW = wiRegionW,
+                            regionH = wiRegionH,
+                            onRegionXChange = { wiRegionX = it.filter { c -> c.isDigit() } },
+                            onRegionYChange = { wiRegionY = it.filter { c -> c.isDigit() } },
+                            onRegionWChange = { wiRegionW = it.filter { c -> c.isDigit() } },
+                            onRegionHChange = { wiRegionH = it.filter { c -> c.isDigit() } },
+                            tapWhenFound = wiTapWhenFound,
+                            onTapWhenFoundChange = { wiTapWhenFound = it },
+                            errorText = wiError,
+                        )
                 }
             }
         },
@@ -751,7 +881,24 @@ private fun ActionFormDialog(
                         is Action.Delay -> Action.Delay(pDuration!!)
                         Action.GlobalHome -> initial
                         Action.GlobalBack -> initial
-                        is Action.WaitImage -> initial
+                        is Action.WaitImage ->
+                            Action.WaitImage(
+                                templateId = wiTemplateId,
+                                // 全屏时 region=null；否则 x/y + 宽高换算为 left/top/right/bottom
+                                region = if (wiFullscreen) {
+                                    null
+                                } else {
+                                    Rect(
+                                        left = pWiX!!,
+                                        top = pWiY!!,
+                                        right = pWiX + pWiW!!,
+                                        bottom = pWiY + pWiH!!,
+                                    )
+                                },
+                                similarity = pWiSimilarity!!,
+                                timeoutMs = pWiTimeoutSec!! * 1000,
+                                tapWhenFound = wiTapWhenFound,
+                            )
                     }
                     onConfirm(newAction)
                 },
@@ -774,6 +921,163 @@ private fun NumberField(label: String, value: String, onChange: (String) -> Unit
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/**
+ * WaitImage（等待识图）参数表单。
+ *
+ * 字段：模板下拉、超时秒数（≥1）、相似度（0~1）、全屏复选框、
+ * 非全屏时的起始 x/y 与宽高、找到后是否点击开关；底部显示第一条校验错误。
+ * 字段较多，外层用可滚动 Column 并限制最大高度，避免在小屏溢出。
+ */
+@Composable
+private fun WaitImageFormFields(
+    templates: List<ImageTemplateMetadata>,
+    selectedTemplateId: String,
+    onTemplateSelect: (String) -> Unit,
+    timeoutSec: String,
+    onTimeoutChange: (String) -> Unit,
+    similarity: String,
+    onSimilarityChange: (String) -> Unit,
+    fullscreen: Boolean,
+    onFullscreenChange: (Boolean) -> Unit,
+    regionX: String,
+    regionY: String,
+    regionW: String,
+    regionH: String,
+    onRegionXChange: (String) -> Unit,
+    onRegionYChange: (String) -> Unit,
+    onRegionWChange: (String) -> Unit,
+    onRegionHChange: (String) -> Unit,
+    tapWhenFound: Boolean,
+    onTapWhenFoundChange: (Boolean) -> Unit,
+    errorText: String?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 420.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // 1) 模板下拉选择
+        TemplateDropdown(
+            templates = templates,
+            selectedId = selectedTemplateId,
+            onSelect = onTemplateSelect,
+        )
+
+        // 2) 超时秒数（内部 ×1000 存 timeoutMs）
+        OutlinedTextField(
+            value = timeoutSec,
+            onValueChange = onTimeoutChange,
+            label = { Text("超时秒数（≥1）") },
+            singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = KeyboardType.Number
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        // 3) 相似度 0~1（允许小数）
+        OutlinedTextField(
+            value = similarity,
+            onValueChange = onSimilarityChange,
+            label = { Text("相似度（0~1）") },
+            singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = KeyboardType.Decimal
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        // 4) 全屏复选框：勾选时 region=null
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = fullscreen, onCheckedChange = onFullscreenChange)
+            Text("全屏（不限制找图区域）")
+        }
+
+        // 非全屏时显示区域四个输入：起始 x/y + 宽高
+        if (!fullscreen) {
+            NumberField("区域起始 X（非负）", regionX, onRegionXChange)
+            NumberField("区域起始 Y（非负）", regionY, onRegionYChange)
+            NumberField("区域宽度（>0）", regionW, onRegionWChange)
+            NumberField("区域高度（>0）", regionH, onRegionHChange)
+        }
+
+        // 5) 找到后是否点击
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Switch(
+                checked = tapWhenFound,
+                onCheckedChange = onTapWhenFoundChange,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("找到后点击匹配位置")
+        }
+
+        // 6) 校验错误中文提示
+        if (errorText != null) {
+            Text(
+                text = errorText,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+/**
+ * 识图模板下拉选择（Material3 ExposedDropdownMenuBox）。
+ * 模板列表为空时字段只读且不可展开，提示文案由外层校验区统一展示。
+ */
+@Composable
+private fun TemplateDropdown(
+    templates: List<ImageTemplateMetadata>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val menuExpanded = expanded && templates.isNotEmpty()
+    val selectedName = templates.firstOrNull { it.id == selectedId }?.name ?: ""
+
+    ExposedDropdownMenuBox(
+        expanded = menuExpanded,
+        onExpandedChange = { if (templates.isNotEmpty()) expanded = it },
+    ) {
+        OutlinedTextField(
+            value = selectedName,
+            onValueChange = {},
+            readOnly = true,
+            enabled = templates.isNotEmpty(),
+            label = { Text("识图模板") },
+            trailingIcon = {
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = menuExpanded)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+        )
+        ExposedDropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            templates.forEach { template ->
+                DropdownMenuItem(
+                    text = { Text(template.name) },
+                    onClick = {
+                        onSelect(template.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
 }
 
 /** 「设为循环段」确认弹窗：名称 + 次数 N（≥1） */
@@ -964,6 +1268,8 @@ data class EditorUiState(
     val packages: List<FunctionPackage> = emptyList(),
     /** packageId -> 函数包名称（PackageCall 渲染解析） */
     val packageNames: Map<String, String> = emptyMap(),
+    /** 全部识图模板元数据（WaitImage 表单下拉数据源） */
+    val templates: List<ImageTemplateMetadata> = emptyList(),
     /** 已折叠的 LoopGroup id 集合 */
     val collapsed: Set<String> = emptySet(),
     /** 是否处于多选模式 */
@@ -1049,12 +1355,14 @@ sealed interface EditorIntent {
  * @param scriptId 当前脚本 id
  * @param scriptRepository 脚本仓库（加载/保存）
  * @param packageRepository 函数包仓库（包名解析、插入调用列表、另存为函数包）
+ * @param templateRepository 识图模板仓库（WaitImage 表单的模板列表）
  */
 class ScriptEditorViewModel(
     private val app: MyApplication,
     private val scriptId: String,
     private val scriptRepository: ScriptFileRepository,
     private val packageRepository: FunctionPackageRepository,
+    private val templateRepository: ImageTemplateRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(EditorUiState())
@@ -1073,6 +1381,8 @@ class ScriptEditorViewModel(
         viewModelScope.launch {
             val script = scriptRepository.get(scriptId)
             val packages = runCatching { packageRepository.list() }.getOrDefault(emptyList())
+            // 仿照 packages 模式，进页面一次性加载识图模板列表
+            val templates = runCatching { templateRepository.list() }.getOrDefault(emptyList())
             if (script == null) {
                 _state.update { it.copy(loading = false, notFound = true) }
                 return@launch
@@ -1085,6 +1395,7 @@ class ScriptEditorViewModel(
                     steps = script.steps,
                     packages = packages,
                     packageNames = packages.associate { pkg -> pkg.id to pkg.name },
+                    templates = templates,
                 )
             }
         }
