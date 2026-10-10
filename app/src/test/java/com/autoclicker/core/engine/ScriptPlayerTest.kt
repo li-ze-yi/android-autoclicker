@@ -5,7 +5,6 @@ import com.autoclicker.domain.model.FunctionPackage
 import com.autoclicker.domain.model.RepeatPolicy
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptStep
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -55,6 +54,18 @@ class ScriptPlayerTest {
 
     private fun tapStep(id: String, x: Int, y: Int): ScriptStep =
         ScriptStep.BasicStep(id, Action.Tap(x, y))
+
+    /** 断言块抛出 PlaybackException 并返回该异常 */
+    private inline fun expectPlayback(block: () -> Unit): PlaybackException {
+        try {
+            block()
+        } catch (e: PlaybackException) {
+            return e
+        } catch (t: Throwable) {
+            throw AssertionError("应抛 PlaybackException，实际为 $t")
+        }
+        throw AssertionError("应抛 PlaybackException，实际未抛异常")
+    }
 
     private fun delayStep(id: String, ms: Long): ScriptStep =
         ScriptStep.BasicStep(id, Action.Delay(ms))
@@ -215,8 +226,7 @@ class ScriptPlayerTest {
             steps = listOf(callStep("c", "p1")),
             repeatPolicy = RepeatPolicy.Count(1),
         )
-        val ex = runCatching { player.play(script) }.exceptionOrNull()
-        assertTrue("应抛 PlaybackException，实际 $ex", ex is PlaybackException)
+        val ex = expectPlayback { player.play(script) }
         assertTrue("消息应说明深度，实际 ${ex.message}", ex.message!!.contains("深度"))
         // 深层步骤不应被执行
         assertTrue(recorder.commands.isEmpty())
@@ -234,8 +244,7 @@ class ScriptPlayerTest {
             steps = listOf(callStep("c", "pa")),
             repeatPolicy = RepeatPolicy.Count(1),
         )
-        val ex = runCatching { player.play(script) }.exceptionOrNull()
-        assertTrue(ex is PlaybackException)
+        val ex = expectPlayback { player.play(script) }
         assertTrue("消息应说明环，实际 ${ex.message}", ex.message!!.contains("环"))
     }
 
@@ -248,8 +257,7 @@ class ScriptPlayerTest {
             steps = listOf(callStep("c", "missing")),
             repeatPolicy = RepeatPolicy.Count(1),
         )
-        val ex = runCatching { player.play(script) }.exceptionOrNull()
-        assertTrue(ex is PlaybackException)
+        val ex = expectPlayback { player.play(script) }
         assertTrue("消息应说明不存在，实际 ${ex.message}", ex.message!!.contains("不存在"))
     }
 
@@ -264,8 +272,7 @@ class ScriptPlayerTest {
             ),
             repeatPolicy = RepeatPolicy.Count(1),
         )
-        val ex = runCatching { player.play(script) }.exceptionOrNull()
-        assertTrue(ex is PlaybackException)
+        val ex = expectPlayback { player.play(script) }
         assertTrue(ex.message!!.contains("识图"))
     }
 }
