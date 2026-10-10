@@ -792,8 +792,14 @@ private fun StepConfigDialog(
                 NumberFieldRow("执行次数", repeat) { repeat = it }
                 TextFieldRow("备注", note) { note = it }
                 BoolFieldRow("启用", enabled) { enabled = it }
+                // 跳转目标包含本步骤自身（选自己 = 成功/失败后重新执行本步骤，可做识别重试循环）。
                 val options = listOf<Pair<String?, String>>(null to "（继续下一步）") +
-                    allSteps.filter { it.id != step.id }.map { it.id to "${it.id.take(6)} · ${actionSummary(it.action)}" }
+                    allSteps.map {
+                        it.id to (
+                            (if (it.id == step.id) "本步骤自身 · " else "") +
+                                "${it.id.take(6)} · ${actionSummary(it.action)}"
+                            )
+                    }
                 ChoiceField("成功跳转", success, options) { success = it }
                 ChoiceField("失败跳转", failure, options) { failure = it }
             }
