@@ -1,5 +1,6 @@
 package com.autoclicker.domain.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -29,17 +30,20 @@ sealed interface RepeatPolicy {
 
     /** 重复指定次数；[times] 必须 >= 1 */
     @Serializable
+    @SerialName("Count")
     data class Count(
         val times: Int = 1,
     ) : RepeatPolicy
 
     /** 重复直到总时长达到 [durationMs] 毫秒 */
     @Serializable
+    @SerialName("UntilTime")
     data class UntilTime(
         val durationMs: Long,
     ) : RepeatPolicy
 
     /** 无限循环，直到用户手动停止 */
     @Serializable
+    @SerialName("UntilStopped")
     data object UntilStopped : RepeatPolicy
 }

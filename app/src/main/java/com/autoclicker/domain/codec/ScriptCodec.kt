@@ -58,11 +58,13 @@ object ScriptCodec {
 internal fun parseRootObject(text: String, dataLabel: String): JsonObject {
     val element = try {
         domainJson.parseToJsonElement(text)
-    } catch (e: SerializationException) {
+    } catch (e: Exception) {
+        // 兜底：除 SerializationException 外，部分非法输入（如 "<<<"）可能抛出
+        // IllegalArgumentException 等，一律视为数据损坏。
         throw ScriptDataException("${dataLabel}数据已损坏，不是有效的 JSON：${e.message ?: "未知错误"}", e)
     }
     return element as? JsonObject
-        ?: throw ScriptDataException("${dataLabel}数据格式错误：顶层必须是 JSON 对象")
+        ?: throw ScriptDataException("${dataLabel}数据已损坏：顶层必须是 JSON 对象")
 }
 
 /** 从顶层对象读取 schemaVersion；缺失或类型非法时抛 [ScriptDataException] */

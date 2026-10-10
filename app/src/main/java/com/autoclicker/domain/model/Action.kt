@@ -1,5 +1,6 @@
 package com.autoclicker.domain.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -30,6 +31,7 @@ sealed interface Action {
 
     /** 点按：在 (x, y) 处单击一次 */
     @Serializable
+    @SerialName("Tap")
     data class Tap(
         val x: Int,
         val y: Int,
@@ -37,6 +39,7 @@ sealed interface Action {
 
     /** 长按：在 (x, y) 处长按 [durationMs] 毫秒（对应 FR-4） */
     @Serializable
+    @SerialName("LongPress")
     data class LongPress(
         val x: Int,
         val y: Int,
@@ -45,6 +48,7 @@ sealed interface Action {
 
     /** 滑动：从 (x1, y1) 滑到 (x2, y2)，持续 [durationMs] 毫秒（建议 >= 300ms） */
     @Serializable
+    @SerialName("Swipe")
     data class Swipe(
         val x1: Int,
         val y1: Int,
@@ -55,6 +59,7 @@ sealed interface Action {
 
     /** 延时：等待 [durationMs] 毫秒，不产生任何手势 */
     @Serializable
+    @SerialName("Delay")
     data class Delay(
         val durationMs: Long,
     ) : Action
@@ -69,6 +74,7 @@ sealed interface Action {
      * @param tapWhenFound true=找到后点击匹配点；false=找到后仅继续下一步
      */
     @Serializable
+    @SerialName("WaitImage")
     data class WaitImage(
         val templateId: String,
         val region: Rect? = null,

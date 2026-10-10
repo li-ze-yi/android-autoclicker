@@ -1,5 +1,6 @@
 package com.autoclicker.domain.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -23,6 +24,7 @@ sealed interface ScriptStep {
      * 基础步骤：包装一个 [Action]。
      */
     @Serializable
+    @SerialName("BasicStep")
     data class BasicStep(
         override val id: String,
         val action: Action,
@@ -35,6 +37,7 @@ sealed interface ScriptStep {
      * @param count 循环次数，必须 >= 1，由 StructureValidator 校验
      */
     @Serializable
+    @SerialName("LoopGroup")
     data class LoopGroup(
         override val id: String,
         val name: String = DEFAULT_NAME,
@@ -52,6 +55,7 @@ sealed interface ScriptStep {
      * 运行时按 ID 解析函数包最新内容。调用链深度与环由 StructureValidator 校验。
      */
     @Serializable
+    @SerialName("PackageCall")
     data class PackageCall(
         override val id: String,
         val packageId: String,
