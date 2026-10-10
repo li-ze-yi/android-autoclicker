@@ -28,6 +28,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -45,8 +46,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.service.capture.TemplateCaptureOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -87,11 +90,26 @@ fun TemplatesScreen() {
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            Text(
-                text = "模板",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(16.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "模板",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(onClick = capture@{
+                    if (!PermissionChecker.requireOverlay(context)) return@capture
+                    TemplateCaptureOverlay.start(context) { template ->
+                        if (template != null) {
+                            scope.launch { templates = ServiceLocator.templates.list() }
+                        }
+                    }
+                }) { Text("截图添加") }
+            }
             if (templates.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("暂无模板，点击右下角导入图片", style = MaterialTheme.typography.bodyMedium)

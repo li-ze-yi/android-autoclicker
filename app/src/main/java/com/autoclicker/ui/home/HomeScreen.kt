@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Script
 import kotlinx.coroutines.launch
@@ -154,6 +155,7 @@ fun HomeScreen(
                             onOpen = { onOpenScript(script.id) },
                             onRun = {
                                 scope.launch {
+                                    if (!PermissionChecker.requireAccessibility(ServiceLocator.context)) return@launch
                                     val player = ServiceLocator.player
                                     if (player == null) {
                                         toast("运行引擎未就绪")

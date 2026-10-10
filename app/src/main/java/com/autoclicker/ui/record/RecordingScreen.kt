@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.ConditionAction
@@ -107,10 +108,17 @@ fun RecordingScreen(onBack: () -> Unit) {
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             RecordingControls(
                 recording = recording,
-                onStart = { Recorder.start(context) },
+                onStart = start@{
+                    if (!PermissionChecker.requireAccessibility(context)) return@start
+                    if (!PermissionChecker.requireOverlay(context)) return@start
+                    Recorder.start(context)
+                },
                 onPause = { Recorder.pause(context) },
                 onStop = { Recorder.stop(context) },
-                onPick = { Recorder.pickPoint(context) },
+                onPick = pick@{
+                    if (!PermissionChecker.requireOverlay(context)) return@pick
+                    Recorder.pickPoint(context)
+                },
             )
             Text(
                 text = "已录制 ${steps.size} 步 · 录制期间可正常操作目标 App（基于无障碍事件）",

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -16,8 +17,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.AreaRandomClickAction
 import com.autoclicker.domain.model.BoolCombine
@@ -64,6 +68,7 @@ import com.autoclicker.domain.model.TextSource
 import com.autoclicker.domain.model.ToastAction
 import com.autoclicker.domain.model.VarOp
 import com.autoclicker.domain.model.VariableOpAction
+import com.autoclicker.service.capture.TemplateCaptureOverlay
 
 /**
  * 动作参数表单对话框：以 [initial] 为模板编辑，确定时回调最终动作。
@@ -210,7 +215,12 @@ private fun AreaRandomForm(a: AreaRandomClickAction, onChange: (Action) -> Unit)
 
 @Composable
 private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, onChange: (Action) -> Unit) {
+    val context = LocalContext.current
     var templateId by remember { mutableStateOf(a.templateId.ifBlank { templates.firstOrNull()?.id.orEmpty() }) }
+    var extraTemplates by remember { mutableStateOf<List<ImageTemplate>>(emptyList()) }
+    val allTemplates = remember(templates, extraTemplates) {
+        templates + extraTemplates.filter { extra -> templates.none { it.id == extra.id } }
+    }
     var similarity by remember { mutableStateOf(a.similarity.toString()) }
     var randomOffset by remember { mutableStateOf(a.randomOffset.toString()) }
     var regionEnabled by remember { mutableStateOf(a.region != null) }
@@ -239,11 +249,27 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
             ),
         )
     }
-    ChoiceField(
-        label = "模板",
-        selected = templateId,
-        options = templates.map { it.id to it.name },
-    ) { templateId = it; emit() }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        ChoiceField(
+            label = "模板",
+            selected = templateId,
+            options = allTemplates.map { it.id to it.name },
+            modifier = Modifier.weight(1f),
+        ) { templateId = it; emit() }
+        OutlinedButton(
+            onClick = capture@{
+                if (!PermissionChecker.requireOverlay(context)) return@capture
+                TemplateCaptureOverlay.start(context) { template ->
+                    if (template != null) {
+                        extraTemplates = extraTemplates + template
+                        templateId = template.id
+                        emit()
+                    }
+                }
+            },
+            modifier = Modifier.padding(start = 8.dp),
+        ) { Text("截图新建模板") }
+    }
     NumberFieldRow("相似度（0..1）", similarity) { similarity = it; emit() }
     NumberFieldRow("随机偏移（像素）", randomOffset) { randomOffset = it; emit() }
     BoolFieldRow("限定识别区域", regionEnabled) { regionEnabled = it; emit() }

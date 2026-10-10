@@ -24,6 +24,7 @@ import com.autoclicker.core.bus.PlaybackState
 import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.ClickAction
@@ -34,6 +35,7 @@ import com.autoclicker.domain.model.LongPressAction
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.domain.model.SwipeAction
+import com.autoclicker.service.capture.TemplateCaptureOverlay
 import com.autoclicker.service.record.Recorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +62,13 @@ class OverlayService : Service() {
 
     private var ballView: TextView? = null
     private var consoleView: View? = null
+
+    /** 悬浮球的窗口参数（拖动时原地更新，用于计算控制台位置避免重叠）。 */
+    private var ballParams: WindowManager.LayoutParams? = null
+
+    /** 自动缩小去重：记录上一次播放/录制状态，仅在「切入」RUNNING/RECORDING 时收起一次。 */
+    private var lastPlaybackState: PlaybackState = PlaybackState.IDLE
+    private var lastRecordingState: RecordingState = RecordingState.IDLE
 
     private var stateText: TextView? = null
     private var stepText: TextView? = null
@@ -99,6 +108,28 @@ class OverlayService : Service() {
             hideConsoleAction = { hideConsole() },
         )
         ServiceLocator.overlay = controller
+        observeAutoShrink()
+    }
+
+    /**
+     * 自动缩小：播放切入 [PlaybackState.RUNNING] 或录制切入 [RecordingState.RECORDING] 时收起控制台。
+     * 仅在状态发生「切入」的那一次触发，用户手动展开后不会被再次收起，直到状态下次重新切入。
+     */
+    private fun observeAutoShrink() {
+        scope.launch {
+            RuntimeBus.state.collect { state ->
+                val enteredRunning = state == PlaybackState.RUNNING && lastPlaybackState != PlaybackState.RUNNING
+                lastPlaybackState = state
+                if (enteredRunning) hideConsole()
+            }
+        }
+        scope.launch {
+            RuntimeBus.recording.collect { state ->
+                val enteredRecording = state == RecordingState.RECORDING && lastRecordingState != RecordingState.RECORDING
+                lastRecordingState = state
+                if (enteredRecording) hideConsole()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -152,6 +183,7 @@ class OverlayService : Service() {
             return
         }
         ballView = ball
+        ballParams = params
         observeBallState()
         RuntimeBus.log("悬浮球已显示（单击展开控制台，长按快速开始/停止）")
     }
@@ -161,6 +193,7 @@ class OverlayService : Service() {
         ballStateJob = null
         val view = ballView ?: return
         ballView = null
+        ballParams = null
         try {
             windowManager.removeView(view)
         } catch (t: Throwable) {
@@ -287,11 +320,21 @@ class OverlayService : Service() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
 
-        root.addView(TextView(this).apply {
-            text = "运行控制台"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-        })
+        // 标题行：左侧标题 + 右侧醒目的「缩小」按钮（收起控制台，仅留悬浮球）
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(
+            TextView(this).apply {
+                text = "运行控制台"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        titleRow.addView(button("缩小") { hideConsole() })
+        root.addView(titleRow)
 
         // 脚本选择（悬浮窗内不使用弹出菜单，避免不可聚焦窗口收不到点击）
         val scriptRow = LinearLayout(this).apply {
@@ -351,7 +394,6 @@ class OverlayService : Service() {
         playRow.addView(start)
         playRow.addView(pause)
         playRow.addView(stop)
-        playRow.addView(button("隐藏") { hideConsole() })
         root.addView(playRow)
 
         // 录制控制
@@ -365,19 +407,32 @@ class OverlayService : Service() {
 
         val recordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val record = button("录制") {
+            if (!PermissionChecker.requireAccessibility(this)) return@button
             if (Recorder.isRecording()) Recorder.stop(this) else Recorder.start(this)
             RuntimeBus.log(if (Recorder.isRecording()) "控制台：录制开始" else "控制台：录制停止")
         }
         recordButton = record
         recordRow.addView(record)
         recordRow.addView(button("暂停录") {
+            if (!PermissionChecker.requireAccessibility(this)) return@button
             if (Recorder.isRecording()) Recorder.pause(this)
         })
         recordRow.addView(button("取点") {
+            if (!PermissionChecker.requireOverlay(this)) return@button
             Recorder.pickPoint(this)
             RuntimeBus.log("控制台：进入取点模式")
         })
         root.addView(recordRow)
+
+        // 截图建模板（悬浮窗内直接唤起截图裁剪层）
+        val templateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        templateRow.addView(button("截图建模板") {
+            if (!PermissionChecker.requireOverlay(this)) return@button
+            TemplateCaptureOverlay.start(this) { template ->
+                if (template != null) RuntimeBus.log("控制台：已添加模板「${template.name}」")
+            }
+        })
+        root.addView(templateRow)
 
         // 已录制步骤（可直接修改）
         root.addView(TextView(this).apply {
@@ -425,6 +480,8 @@ class OverlayService : Service() {
             return
         }
         consoleView = root
+        // 测量后再定位，确保控制台矩形与悬浮球矩形不相交。
+        root.post { applyConsolePosition(root, params) }
 
         loadScripts()
         renderLogs(RuntimeBus.logs.value)
@@ -458,6 +515,44 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * 依据悬浮球当前位置计算控制台窗口的 x/y，使两者矩形不相交：
+     * 优先放在球下方（ballY + ballSize + gap），下方空间不足则放到球上方（ballY - consoleHeight - gap），
+     * 最后对屏幕边界做 clamp（x 同理）。
+     */
+    private fun applyConsolePosition(view: View, params: WindowManager.LayoutParams) {
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+        val consoleW = params.width
+        val consoleH = if (view.height > 0) view.height else view.measuredHeight
+        val ball = ballParams
+        val hasBall = ball != null && ballView != null
+
+        var x = if (hasBall) ball!!.x else params.x
+        var y = if (hasBall) ball!!.y else params.y
+
+        if (hasBall && consoleH > 0) {
+            val ballSize = dp(BALL_SIZE_DP)
+            val gap = dp(CONSOLE_GAP_DP)
+            val belowY = ball!!.y + ballSize + gap
+            val aboveY = ball!!.y - consoleH - gap
+            y = when {
+                belowY + consoleH <= screenH -> belowY
+                aboveY >= 0 -> aboveY
+                else -> belowY
+            }
+        } else if (hasBall) {
+            y = ball!!.y + dp(BALL_SIZE_DP) + dp(CONSOLE_GAP_DP)
+        }
+
+        val maxX = (screenW - consoleW).coerceAtLeast(0)
+        val maxY = (screenH - consoleH).coerceAtLeast(0)
+        params.x = x.coerceIn(0, maxX)
+        params.y = y.coerceIn(0, maxY)
+        runCatching { windowManager.updateViewLayout(view, params) }
+    }
+
     private fun loadScripts() {
         scope.launch {
             scripts = runCatching { ServiceLocator.scripts.list() }.getOrDefault(emptyList())
@@ -483,6 +578,7 @@ class OverlayService : Service() {
     }
 
     private fun startSelectedScript() {
+        if (!PermissionChecker.requireAccessibility(this)) return
         scope.launch {
             val script = selectedScript ?: scripts.firstOrNull()
             if (script == null) {
@@ -664,6 +760,7 @@ class OverlayService : Service() {
         private const val DRAG_SLOP_PX = 8f
         private const val LONG_PRESS_MS = 450L
         private const val CONSOLE_WIDTH_DP = 300
+        private const val CONSOLE_GAP_DP = 8
         private const val LOG_VIEW_HEIGHT_DP = 150
         private const val STEPS_VIEW_HEIGHT_DP = 170
         private const val LOG_MAX_LINES = 120
