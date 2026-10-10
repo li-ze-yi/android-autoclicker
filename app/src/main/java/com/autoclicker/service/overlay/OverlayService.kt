@@ -1,6 +1,5 @@
 package com.autoclicker.service.overlay
 
-import android.app.AlertDialog
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -16,7 +15,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -30,7 +28,6 @@ import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.GroupNode
-import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.StepNode
@@ -755,19 +752,10 @@ class OverlayService : Service() {
             Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
             return
         }
-        val input = EditText(this).apply {
-            setText(RecordingSession.scriptName.value ?: "")
-            setHint("任务名称")
-        }
-        AlertDialog.Builder(this)
-            .setTitle("重命名任务")
-            .setView(input)
-            .setPositiveButton("确定") { _, _ ->
-                RecordingSession.rename(input.text.toString())
-                RuntimeBus.log("控制台：任务已重命名为「${RecordingSession.scriptName.value ?: ""}」")
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        // 悬浮窗里不能用 android.app.AlertDialog：Service 上下文没有窗口 token，
+        // show() 会抛 BadTokenException 直接崩掉进程（表现为悬浮球「自动结束」）。
+        // 统一改为打开悬浮窗内的编辑面板，用内联输入完成重命名。
+        OverlayTaskEditor.open(this, OverlayTaskEditor.StartMode.RENAME)
     }
 
     private fun openTaskEditor() {
@@ -783,17 +771,8 @@ class OverlayService : Service() {
             Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
             return
         }
-        val input = EditText(this).apply { setHint("步骤组名称") }
-        AlertDialog.Builder(this)
-            .setTitle("新建步骤组")
-            .setView(input)
-            .setPositiveButton("确定") { _, _ ->
-                val name = input.text.toString().trim().ifBlank { "步骤组" }
-                RecordingSession.addNode(GroupNode(Ids.newId(), name, emptyList(), 1))
-                RuntimeBus.log("控制台：已新建步骤组「$name」")
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        // 同上：用悬浮窗内的内联「新建步骤组」页面，替代会崩溃的 Service 对话框。
+        OverlayTaskEditor.open(this, OverlayTaskEditor.StartMode.GROUP)
     }
 
     private fun renderLogs(logs: List<LogEntry>) {

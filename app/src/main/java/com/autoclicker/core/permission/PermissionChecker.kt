@@ -1,12 +1,14 @@
 package com.autoclicker.core.permission
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.autoclicker.core.bus.LogLevel
@@ -24,11 +26,35 @@ object PermissionChecker {
 
     fun isAccessibilityEnabled(context: Context): Boolean {
         val expected = AutomationAccessibilityService::class.java.name
-        val enabled = Settings.Secure.getString(
+        val packageName = context.packageName
+
+        // 首选：AccessibilityManager 中「实际启用」的服务列表，各 ROM 都可靠。
+        val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+        val enabledServices = manager
+            ?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        if (enabledServices?.any { info ->
+                val serviceInfo = info.resolveInfo?.serviceInfo
+                serviceInfo != null &&
+                    serviceInfo.packageName == packageName &&
+                    serviceInfo.name == expected
+            } == true
+        ) {
+            return true
+        }
+
+        // 兜底：读系统设置字符串，同时兼容「包名/全类名」与「包名/.短类名」两种写法。
+        val raw = Settings.Secure.getString(
             context.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
         ) ?: return false
-        return enabled.split(':').any { it.equals(expected, ignoreCase = true) || it.endsWith("/$expected") }
+        val longForm = "$packageName/$expected"
+        val shortForm = "$packageName/.${expected.removePrefix("$packageName.")}"
+        return raw.split(':').any { entry ->
+            val value = entry.trim()
+            value.equals(longForm, ignoreCase = true) ||
+                value.equals(shortForm, ignoreCase = true) ||
+                value.endsWith("/$expected", ignoreCase = true)
+        }
     }
 
     fun isOverlayGranted(context: Context): Boolean =

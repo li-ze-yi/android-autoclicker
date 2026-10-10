@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -69,6 +70,7 @@ import com.autoclicker.ui.editor.ACTION_CATEGORIES
 import com.autoclicker.ui.editor.ActionCategory
 import com.autoclicker.ui.editor.ActionEntry
 import com.autoclicker.ui.editor.ActionFormContent
+import com.autoclicker.ui.editor.LocalOverlayHost
 import com.autoclicker.ui.editor.actionSummary
 import com.autoclicker.ui.editor.actionTitle
 import com.autoclicker.ui.theme.AppTheme
@@ -81,6 +83,9 @@ import kotlin.math.roundToInt
  * 步骤读写统一走 [RecordingSession]，任何修改都会自动保存回任务。
  */
 object OverlayTaskEditor {
+
+    /** 打开编辑器时的初始页面。 */
+    enum class StartMode { LIST, RENAME, GROUP }
 
     private const val WIDTH_DP = 340
     private const val MARGIN_DP = 12
@@ -100,8 +105,8 @@ object OverlayTaskEditor {
 
     fun isOpen(): Boolean = active
 
-    /** 打开悬浮窗内的任务编辑器。 */
-    fun open(context: Context) {
+    /** 打开悬浮窗内的任务编辑器。[startMode] 可直达重命名 / 新建步骤组，避免在 Service 里弹对话框。 */
+    fun open(context: Context, startMode: StartMode = StartMode.LIST) {
         if (active) return
         if (!PermissionChecker.requireOverlay(context)) return
         val app = context.applicationContext
@@ -116,7 +121,13 @@ object OverlayTaskEditor {
                 setViewTreeSavedStateRegistryOwner(lifecycleOwner)
                 setContent {
                     AppTheme {
-                        OverlayTaskEditorPanel(onClose = { close() })
+                        // 悬浮窗宿主没有 Activity 窗口 token，Popup 型菜单不可用，需降级为内联展开。
+                        CompositionLocalProvider(LocalOverlayHost provides true) {
+                            OverlayTaskEditorPanel(
+                                startMode = startMode,
+                                onClose = { close() },
+                            )
+                        }
                     }
                 }
             }
@@ -244,7 +255,10 @@ private const val PANEL_MAX_HEIGHT_DP = 560
 private enum class EditorScreen { LIST, CATEGORY, ACTION, FORM, GROUP }
 
 @Composable
-private fun OverlayTaskEditorPanel(onClose: () -> Unit) {
+private fun OverlayTaskEditorPanel(
+    startMode: OverlayTaskEditor.StartMode,
+    onClose: () -> Unit,
+) {
     val nodes by RecordingSession.nodes.collectAsState()
     val scriptName by RecordingSession.scriptName.collectAsState()
 
@@ -258,9 +272,21 @@ private fun OverlayTaskEditorPanel(onClose: () -> Unit) {
         textGroups = runCatching { ServiceLocator.textGroups.list() }.getOrDefault(emptyList())
     }
 
-    var screen by remember { mutableStateOf(EditorScreen.LIST) }
-    var renaming by remember { mutableStateOf(false) }
-    var renameText by remember { mutableStateOf("") }
+    var screen by remember {
+        mutableStateOf(
+            if (startMode == OverlayTaskEditor.StartMode.GROUP) EditorScreen.GROUP else EditorScreen.LIST,
+        )
+    }
+    var renaming by remember { mutableStateOf(startMode == OverlayTaskEditor.StartMode.RENAME) }
+    var renameText by remember {
+        mutableStateOf(
+            if (startMode == OverlayTaskEditor.StartMode.RENAME) {
+                RecordingSession.scriptName.value.orEmpty()
+            } else {
+                ""
+            },
+        )
+    }
     var category by remember { mutableStateOf<ActionCategory?>(null) }
     var editingStepId by remember { mutableStateOf<String?>(null) }
     var action by remember { mutableStateOf<Action?>(null) }

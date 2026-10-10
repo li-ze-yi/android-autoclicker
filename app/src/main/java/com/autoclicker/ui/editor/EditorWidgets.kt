@@ -3,6 +3,7 @@ package com.autoclicker.ui.editor
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,16 +17,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+
+/**
+ * 当前 Compose 宿主是否位于悬浮窗（非 Activity 窗口）内。
+ *
+ * 悬浮窗窗口没有 Activity 的窗口 token，[DropdownMenu] 这类 Popup 无法正常弹出（部分机型直接抛
+ * BadTokenException 崩掉进程、表现为悬浮球突然消失），因此为 true 时下拉改为「内联展开列表」。
+ */
+val LocalOverlayHost = staticCompositionLocalOf { false }
 
 /** 百分比数值（0..1）显示为 0..100 的整数字符串。 */
 fun formatPercent(v: Float): String = (v * 100f).roundToInt().toString()
@@ -118,35 +129,60 @@ fun <T> ChoiceField(
     onSelect: (T) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val inlineMenu = LocalOverlayHost.current
     val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: "未选择"
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    Column(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
-                .matchParentSize()
-                .clickable { expanded = true },
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { (value, text) ->
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        expanded = false
-                        onSelect(value)
-                    },
-                )
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(label) },
+                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable { expanded = !expanded },
+            )
+            if (!inlineMenu) {
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    options.forEach { (value, text) ->
+                        DropdownMenuItem(
+                            text = { Text(text) },
+                            onClick = {
+                                expanded = false
+                                onSelect(value)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        // 悬浮窗宿主：Popup 不可用，展开为内联列表直接点选。
+        if (inlineMenu && expanded) {
+            Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp)) {
+                options.forEach { (value, text) ->
+                    TextButton(
+                        onClick = {
+                            expanded = false
+                            onSelect(value)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
     }
