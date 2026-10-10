@@ -21,13 +21,15 @@ data class LogEntry(
     val message: String,
 )
 
-/** 当前正在执行的步骤信息（用于控制台高亮）。 */
+/** 当前正在执行的步骤信息（用于控制台高亮与屏幕顶部实时提示）。 */
 data class StepExecutionInfo(
     val scriptId: String,
     val scriptName: String,
     val stepIndex: Int,
     val stepTotal: Int,
     val description: String,
+    /** 该步骤的动作后延时（ms），供顶部提示显示。 */
+    val delayAfterMs: Long = 0L,
 )
 
 /**

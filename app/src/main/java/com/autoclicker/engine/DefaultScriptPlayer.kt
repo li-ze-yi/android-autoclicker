@@ -11,6 +11,7 @@ import com.autoclicker.domain.model.LaunchType
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.platform.PlaybackController
+import com.autoclicker.ui.editor.actionSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -121,7 +122,16 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
             gate = gate,
             runner = StepRunner { step, stepCtx -> executor.execute(step, stepCtx) },
             onStep = { step, index, total ->
-                RuntimeBus.setCurrentStep(StepExecutionInfo(script.id, script.name, index, total, describe(step)))
+                RuntimeBus.setCurrentStep(
+                    StepExecutionInfo(
+                        scriptId = script.id,
+                        scriptName = script.name,
+                        stepIndex = index,
+                        stepTotal = total,
+                        description = describe(step),
+                        delayAfterMs = step.delayAfterMs,
+                    ),
+                )
             },
         )
         RuntimeBus.log(LogLevel.SUCCESS, "运行结束：${script.name}")
@@ -196,7 +206,7 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
     }
 
     private fun describe(step: StepNode): String =
-        step.note.ifBlank { step.action::class.simpleName ?: "步骤" }
+        step.note.ifBlank { actionSummary(step.action) }
 
     companion object {
         private const val MAX_CALL_DEPTH = 32

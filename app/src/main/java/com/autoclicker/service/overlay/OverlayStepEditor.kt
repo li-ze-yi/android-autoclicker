@@ -104,6 +104,9 @@ object OverlayStepEditor {
     private var mode = Mode.LIST
     private var groupSelection = mutableSetOf<String>()
 
+    /** 「添加动作」的目标步骤组 id；null 表示追加到顶层。 */
+    private var actionTargetGroupId: String? = null
+
     fun isOpen(): Boolean = active
 
     // ---------------- 窗口 ----------------
@@ -247,6 +250,7 @@ object OverlayStepEditor {
     private fun buildFooter(context: Context): View {
         val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         row.addView(smallButton("添加动作") {
+            actionTargetGroupId = null
             mode = Mode.LIST
             showAddActionPicker()
         })
@@ -363,6 +367,25 @@ object OverlayStepEditor {
             render()
         })
         column.addView(numbers)
+
+        // 组内增删：往组里追加动作，或把组内步骤移出到组后面。
+        val groupOps = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        groupOps.addView(smallButton("组内加动作") {
+            actionTargetGroupId = group.id
+            showAddActionPicker()
+        })
+        groupOps.addView(smallButton("移出全部(${group.children.size})") {
+            RecordingSession.moveChildrenOutOfGroup(group.id)
+            render()
+        })
+        column.addView(groupOps)
+        if (group.children.isNotEmpty()) {
+            column.addView(
+                hintText(
+                    "组内：" + group.children.joinToString("、") { actionSummary(it.action) },
+                ),
+            )
+        }
         return column
     }
 
@@ -547,6 +570,16 @@ object OverlayStepEditor {
 
     // ---------------- 添加动作 ----------------
 
+    /** 按当前目标追加步骤：在组内则追加到组末尾，否则追加到顶层。 */
+    private fun appendStep(step: StepNode) {
+        val groupId = actionTargetGroupId
+        if (groupId != null && RecordingSession.nodes.value.any { it is GroupNode && it.id == groupId }) {
+            RecordingSession.addNodeToGroup(groupId, step)
+        } else {
+            RecordingSession.addNode(step)
+        }
+    }
+
     /** 编辑器自身的协程域：用于异步加载模板 / 函数包列表（object 常驻，任务短，结束后自然回收）。 */
     private val pickerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -601,7 +634,15 @@ object OverlayStepEditor {
         val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         body.addView(content)
         panel.addView(body)
-        content.addView(hintText("选择要添加的动作（添加后可在此直接改参数/延时）"))
+        content.addView(
+            hintText(
+                if (actionTargetGroupId != null) {
+                    "选择要添加到【步骤组内】的动作（添加后可在此直接改参数/延时）"
+                } else {
+                    "选择要添加的动作（添加后可在此直接改参数/延时）"
+                },
+            ),
+        )
         // 需要先选资源的两类动作放最前。
         content.addView(
             smallButton("点击图片（先选模板）") { showTemplatePicker() },
@@ -612,7 +653,7 @@ object OverlayStepEditor {
         quickActions.forEach { (label, factory) ->
             content.addView(
                 smallButton(label) {
-                    RecordingSession.addNode(StepNode(Ids.newId(), factory()))
+                    appendStep(StepNode(Ids.newId(), factory()))
                     mode = Mode.LIST
                     render()
                 },
@@ -648,9 +689,7 @@ object OverlayStepEditor {
                 templates.forEach { template: ImageTemplate ->
                     content.addView(
                         smallButton(template.name) {
-                            RecordingSession.addNode(
-                                StepNode(Ids.newId(), ClickImageAction(templateId = template.id)),
-                            )
+                            appendStep(StepNode(Ids.newId(), ClickImageAction(templateId = template.id)))
                             mode = Mode.LIST
                             render()
                         },
@@ -685,9 +724,7 @@ object OverlayStepEditor {
                 packages.forEach { pkg: FunctionPackage ->
                     content.addView(
                         smallButton(pkg.name) {
-                            RecordingSession.addNode(
-                                StepNode(Ids.newId(), CallFunctionAction(packageId = pkg.id)),
-                            )
+                            appendStep(StepNode(Ids.newId(), CallFunctionAction(packageId = pkg.id)))
                             mode = Mode.LIST
                             render()
                         },

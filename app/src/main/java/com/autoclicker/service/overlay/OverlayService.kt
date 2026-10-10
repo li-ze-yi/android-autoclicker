@@ -73,6 +73,8 @@ class OverlayService : Service() {
 
     private var stateText: TextView? = null
     private var stepText: TextView? = null
+    /** 屏幕顶部的运行提示条（显示当前动作 + 延时），仅在运行/暂停时出现。 */
+    private var statusBarView: TextView? = null
     private var logsText: TextView? = null
     private var logsScroll: ScrollView? = null
     private var stepsContainer: LinearLayout? = null
@@ -115,6 +117,90 @@ class OverlayService : Service() {
         )
         ServiceLocator.overlay = controller
         observeAutoShrink()
+        observeStatusBar()
+    }
+
+    // ---------------- 屏幕顶部运行提示条 ----------------
+
+    /**
+     * 运行/暂停时在屏幕顶部显示「当前动作 + 延时」提示条，空闲/停止后自动消失。
+     *
+     * 提示条不可触摸（FLAG_NOT_TOUCHABLE），不会挡住脚本自身的点击操作。
+     */
+    private fun observeStatusBar() {
+        scope.launch {
+            RuntimeBus.state.collect { state ->
+                val show = state == PlaybackState.RUNNING || state == PlaybackState.PAUSED
+                if (show) {
+                    showStatusBar()
+                    refreshStatusBar()
+                } else {
+                    hideStatusBar()
+                }
+            }
+        }
+        scope.launch {
+            RuntimeBus.currentStep.collect { refreshStatusBar() }
+        }
+    }
+
+    private fun showStatusBar() {
+        if (statusBarView != null) return
+        if (!Settings.canDrawOverlays(this)) return
+        val bar = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(STATUS_BAR_BG)
+            }
+            text = "运行中…"
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // 不抢焦点、不接收触摸：只做展示，触摸事件穿透到下面的脚本操作。
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(40)
+        }
+        try {
+            windowManager.addView(bar, params)
+        } catch (t: Throwable) {
+            RuntimeBus.log(LogLevel.WARN, "顶部运行提示创建失败：${t.message}")
+            return
+        }
+        statusBarView = bar
+    }
+
+    private fun hideStatusBar() {
+        val view = statusBarView ?: return
+        statusBarView = null
+        try {
+            windowManager.removeView(view)
+        } catch (t: Throwable) {
+            // 忽略移除异常。
+        }
+    }
+
+    private fun refreshStatusBar() {
+        val bar = statusBarView ?: return
+        val info = RuntimeBus.currentStep.value
+        val state = RuntimeBus.state.value
+        bar.text = when {
+            info == null -> "运行中…"
+            else -> {
+                val prefix = if (state == PlaybackState.PAUSED) "已暂停" else "运行中"
+                "$prefix ${info.stepIndex + 1}/${info.stepTotal}：${info.description} · 延时 ${info.delayAfterMs}ms"
+            }
+        }
     }
 
     /**
@@ -163,6 +249,7 @@ class OverlayService : Service() {
     override fun onDestroy() {
         hideConsole()
         hideFloatingBall()
+        hideStatusBar()
         scope.cancel()
         if (ServiceLocator.overlay === controller) ServiceLocator.overlay = null
         super.onDestroy()
@@ -688,7 +775,7 @@ class OverlayService : Service() {
                 stepText?.text = if (info == null) {
                     "步骤：--"
                 } else {
-                    "步骤 ${info.stepIndex + 1}/${info.stepTotal}：${info.description}"
+                    "步骤 ${info.stepIndex + 1}/${info.stepTotal}：${info.description} · 延时 ${info.delayAfterMs}ms"
                 }
             }
         }
@@ -838,6 +925,7 @@ class OverlayService : Service() {
         private val STEP_COLOR = 0xFFFFC107.toInt()
         private val GROUP_COLOR = 0xFF4FC3F7.toInt()
         private val RECORD_COLOR = 0xFFFF8A80.toInt()
+        private val STATUS_BAR_BG = 0xE01B1B1B.toInt()
 
         private const val BALL_SIZE_DP = 52
         private const val DRAG_SLOP_PX = 8f

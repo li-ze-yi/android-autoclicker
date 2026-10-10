@@ -1,6 +1,7 @@
 package com.autoclicker.core.bus
 
 import com.autoclicker.di.ServiceLocator
+import com.autoclicker.domain.model.GroupNode
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptNode
 import kotlinx.coroutines.CoroutineScope
@@ -102,6 +103,39 @@ object RecordingSession {
         if (from == to) return
         val item = list.removeAt(from)
         list.add(to, item)
+        _nodes.value = list
+    }
+
+    // ---------------- 步骤组内的增删 ----------------
+
+    /** 把新动作追加到指定步骤组末尾。 */
+    fun addNodeToGroup(groupId: String, node: ScriptNode) {
+        _nodes.value = _nodes.value.map {
+            if (it is GroupNode && it.id == groupId) it.copy(children = it.children + node) else it
+        }
+    }
+
+    /** 把步骤从所属步骤组中移出，并放到该组之后的顶层位置。 */
+    fun moveOutOfGroup(stepId: String) {
+        val list = _nodes.value.toMutableList()
+        val groupIndex = list.indexOfFirst { it is GroupNode && it.children.any { c -> c.id == stepId } }
+        if (groupIndex < 0) return
+        val group = list[groupIndex] as GroupNode
+        val child = group.children.firstOrNull { it.id == stepId } ?: return
+        list[groupIndex] = group.copy(children = group.children.filterNot { it.id == stepId })
+        list.add(groupIndex + 1, child)
+        _nodes.value = list
+    }
+
+    /** 把步骤组内的全部步骤移出到该组之后的顶层位置（组本身保留）。 */
+    fun moveChildrenOutOfGroup(groupId: String) {
+        val list = _nodes.value.toMutableList()
+        val groupIndex = list.indexOfFirst { it is GroupNode && it.id == groupId }
+        if (groupIndex < 0) return
+        val group = list[groupIndex] as GroupNode
+        if (group.children.isEmpty()) return
+        list[groupIndex] = group.copy(children = emptyList())
+        list.addAll(groupIndex + 1, group.children)
         _nodes.value = list
     }
 

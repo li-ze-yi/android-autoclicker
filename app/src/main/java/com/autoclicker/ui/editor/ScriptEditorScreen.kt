@@ -345,6 +345,11 @@ fun ScriptEditorScreen(
                                     depth = item.depth,
                                     onMoveUp = { updateNodes(nodes.moveNode(node.id, -1)) },
                                     onMoveDown = { updateNodes(nodes.moveNode(node.id, 1)) },
+                                    onMoveOut = if (item.parentId != null) {
+                                        { updateNodes(nodes.moveOutOfGroup(node.id)) }
+                                    } else {
+                                        null
+                                    },
                                     onEditAction = {
                                         formRequest = FormRequest(node.action, node.id, null)
                                     },
@@ -663,6 +668,7 @@ private fun StepCard(
     depth: Int,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
+    onMoveOut: (() -> Unit)?,
     onEditAction: () -> Unit,
     onConfig: () -> Unit,
     onDelete: () -> Unit,
@@ -705,6 +711,9 @@ private fun StepCard(
                 }
                 IconButton(onClick = onConfig, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Filled.Settings, contentDescription = "步骤设置")
+                }
+                if (onMoveOut != null) {
+                    TextButton(onClick = onMoveOut) { Text("移出组") }
                 }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
@@ -884,3 +893,15 @@ private fun List<ScriptNode>.appendTo(parentId: String?, node: ScriptNode): List
     } else {
         map { if (it is GroupNode && it.id == parentId) it.copy(children = it.children + node) else it }
     }
+
+/** 把步骤从所属步骤组中移出，放到该组之后的顶层位置。 */
+private fun List<ScriptNode>.moveOutOfGroup(id: String): List<ScriptNode> {
+    val groupIndex = indexOfFirst { it is GroupNode && it.children.any { c -> c.id == id } }
+    if (groupIndex < 0) return this
+    val group = this[groupIndex] as GroupNode
+    val child = group.children.firstOrNull { it.id == id } ?: return this
+    val list = toMutableList()
+    list[groupIndex] = group.copy(children = group.children.filterNot { it.id == id })
+    list.add(groupIndex + 1, child)
+    return list
+}
