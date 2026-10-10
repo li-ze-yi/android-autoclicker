@@ -907,8 +907,8 @@ private fun StepConfigDialog(
                     if (step.action.hasOutcomeBranch()) {
                         "识别类动作按「是否找到目标」判定成功/失败，条件判断按条件真假判定。"
                     } else {
-                        "该动作没有识别结果，执行完成即算成功（走「成功跳转」）；"
-                            + "只有动作本身失败（如手势/全局能力不可用）才走「失败跳转」。"
+                        "该动作没有识别结果，执行完成即算成功（走「成功跳转」）；" +
+                            "只有动作本身失败（如手势/全局能力不可用）才走「失败跳转」。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
