@@ -420,6 +420,31 @@ class TargetOverlayManager(
         onWindowsChanged()
     }
 
+    /**
+     * 切换目标标记是否可交互。
+     *
+     * 运行回放时（[interactive]=false）给所有标记窗口加 FLAG_NOT_TOUCHABLE：
+     * dispatchGesture 派发的手势会“穿过”位于同坐标的标记直达下层 App，
+     * 避免标记把点击拦截掉；标记仍然可见。空闲时恢复可拖拽编辑。
+     */
+    fun setInteractive(interactive: Boolean) {
+        entries.values.forEach { entry ->
+            entry.handles.forEach { handle ->
+                if (!handle.attached) return@forEach
+                val p = handle.params
+                val newFlags = if (interactive) {
+                    p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                } else {
+                    p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                }
+                if (newFlags != p.flags) {
+                    p.flags = newFlags
+                    runCatching { wm.updateViewLayout(handle.view, p) }
+                }
+            }
+        }
+    }
+
     /** 按目标 ID 集合差异增删窗口（仅集合变化才触发重排，拖拽移动不会重排） */
     private fun reconcile() {
         val newIds = currentTargets.mapTo(LinkedHashSet()) { it.id }

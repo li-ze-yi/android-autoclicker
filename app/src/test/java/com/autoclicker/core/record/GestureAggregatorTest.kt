@@ -52,34 +52,34 @@ class GestureAggregatorTest {
     // ---------- 录制器 ----------
 
     @Test
-    fun 两条手势_自动插入一条延时() {
+    fun 两条手势_每条后自动延时_中间用真实间隔() {
         val r = Recorder()
         r.begin(RecordMode.Precise)
         r.recordGesture(RecordedGesture.Tap(1, 1), timeMs = 100)
         r.recordGesture(RecordedGesture.Tap(2, 2), timeMs = 400)
         val steps = r.steps.value
-        // tap1、delay(300)、tap2
-        assertEquals(3, steps.size)
-        val delay = (steps[1] as ScriptStep.BasicStep).action
-        assertEquals(Action.Delay(300), delay)
+        // Tap1、延时(真实间隔300，替换了默认尾随延时)、Tap2、延时(默认1000)
+        assertEquals(4, steps.size)
+        assertEquals(Action.Delay(300), (steps[1] as ScriptStep.BasicStep).action)
+        assertEquals(Action.Delay(1000), (steps[3] as ScriptStep.BasicStep).action)
     }
 
     @Test
-    fun 关闭自动间隔_不插入延时() {
+    fun 关闭自动延时_不插入任何延时() {
         val r = Recorder()
         r.autoInterval = false
         r.begin(RecordMode.Precise)
         r.recordGesture(RecordedGesture.Tap(1, 1), 100)
         r.recordGesture(RecordedGesture.Tap(2, 2), 200)
-        assertEquals(2, r.steps.value.size)
+        assertEquals(2, r.steps.value)
     }
 
     @Test
-    fun 删除步骤生效() {
+    fun 删除动作_连带其后延时() {
         val r = Recorder()
         r.begin(RecordMode.Normal)
         r.recordGesture(RecordedGesture.Tap(1, 1), 0)
-        val id = r.steps.value.single().id
+        val id = (r.steps.value[0] as ScriptStep.BasicStep).id
         r.removeStep(id)
         assertTrue(r.steps.value.isEmpty())
     }

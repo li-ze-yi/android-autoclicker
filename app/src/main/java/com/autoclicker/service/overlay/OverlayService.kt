@@ -93,9 +93,12 @@ class OverlayService : Service() {
             },
         )
 
-        // 引擎状态 → 播放/暂停图标同步
+        // 引擎状态 → 播放/暂停图标同步；运行时让标记“只显示不拦截”，手势可穿过标记直达 App
         scope.launch {
-            app.bus.engineState.collect { state -> panel.setEngineState(state) }
+            app.bus.engineState.collect { state ->
+                panel.setEngineState(state)
+                manager.setInteractive(state != EngineState.Running)
+            }
         }
         // 隐藏状态 → 小眼睛图标同步
         scope.launch {
@@ -127,7 +130,10 @@ class OverlayService : Service() {
             // 强制隐藏目标控件（TargetOverlayManager 观察 hidden 自动移除目标窗口与连线）
             app.targetController.setHidden(true)
 
-            val layer = PreciseCaptureLayer(this, wm, app.recorder, scope)
+            val layer = PreciseCaptureLayer(this, wm, app.recorder, scope) {
+                // 捕获层重挂后会盖在球之上，需把球/面板重新置顶
+                reorderChrome()
+            }
             layer.attach()
             captureLayer = layer
 
