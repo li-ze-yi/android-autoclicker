@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,14 +73,21 @@ import com.autoclicker.domain.model.TextGroup
 import com.autoclicker.domain.model.flattenSteps
 import com.autoclicker.domain.rule.StructureValidator
 import com.autoclicker.domain.rule.ValidationIssue
+import com.autoclicker.ui.EditorAction
 import kotlinx.coroutines.launch
 
 /**
  * 脚本编辑器：步骤列表、分组、参数配置、动作添加与校验保存。
+ *
+ * [initialAction] 支持外部入口（悬浮球控制台的「动作编辑 / 新建步骤组 / 重命名」）直达对应操作。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
+fun ScriptEditorScreen(
+    scriptId: String,
+    initialAction: String = EditorAction.NONE,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recordingScriptId by RecordingSession.scriptId.collectAsState()
@@ -99,6 +108,10 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
     var groupEditId by remember { mutableStateOf<String?>(null) }
     var groupName by remember { mutableStateOf("") }
     var groupLoop by remember { mutableStateOf("1") }
+    // 新建步骤组时勾选要并入该组的顶层步骤 id
+    var groupSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var renameDialogOpen by remember { mutableStateOf(false) }
+    var renameName by remember { mutableStateOf("") }
     var addParentId by remember { mutableStateOf<String?>(null) }
     var issues by remember { mutableStateOf<List<ValidationIssue>?>(null) }
     // 权限跳转后待重试开始录制的脚本
@@ -113,6 +126,25 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
         packages = runCatching { ServiceLocator.packages.list() }.getOrDefault(emptyList())
         textGroups = runCatching { ServiceLocator.textGroups.list() }.getOrDefault(emptyList())
         loading = false
+    }
+
+    // 外部入口直达：载入完成后再弹对应对话框，避免列表还没数据就打开。
+    LaunchedEffect(initialAction, loading) {
+        if (loading) return@LaunchedEffect
+        when (initialAction) {
+            EditorAction.GROUP -> {
+                groupEditId = null
+                groupName = ""
+                groupLoop = "1"
+                groupSelection = emptySet()
+                groupDialogOpen = true
+            }
+
+            EditorAction.RENAME -> {
+                renameName = script?.name.orEmpty()
+                renameDialogOpen = true
+            }
+        }
     }
 
     val toast: (String) -> Unit = { msg ->
@@ -170,16 +202,36 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                 runCatching { ServiceLocator.scripts.save(saved) }
                     .onFailure { toast("保存失败：${it.message}") }
                 script = saved
+                // 悬浮窗控制台与编辑器共用录制会话，保存后同步，避免两处步骤不一致。
+                RecordingSession.syncFrom(saved)
                 val known = packages.map { it.id }.toSet()
                 issues = StructureValidator.validateScript(saved, known)
             }
         }
     }
 
+    /** 立即保存并同步会话（步骤组 / 重命名等即时操作使用，不弹校验结果）。 */
+    val persist: (Script) -> Unit = { target ->
+        script = target
+        scope.launch {
+            runCatching { ServiceLocator.scripts.save(target) }
+                .onFailure { toast("保存失败：${it.message}") }
+            RecordingSession.syncFrom(target)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(script?.name ?: "脚本编辑") },
+                title = {
+                    Text(
+                        text = script?.name ?: "脚本编辑",
+                        modifier = Modifier.clickable {
+                            renameName = script?.name.orEmpty()
+                            renameDialogOpen = true
+                        },
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -270,6 +322,7 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                             groupEditId = null
                             groupName = ""
                             groupLoop = "1"
+                            groupSelection = emptySet()
                             groupDialogOpen = true
                         },
                         modifier = Modifier.weight(1f),
@@ -318,6 +371,7 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                                         groupEditId = node.id
                                         groupName = node.name
                                         groupLoop = node.loopCount.toString()
+                                        groupSelection = emptySet()
                                         groupDialogOpen = true
                                     },
                                     onMoveUp = { updateNodes(nodes.moveNode(node.id, -1)) },
@@ -425,11 +479,17 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
 
     // 步骤组设置
     if (groupDialogOpen) {
+        val topNodes = script?.nodes.orEmpty()
         AlertDialog(
             onDismissRequest = { groupDialogOpen = false },
             title = { Text(if (groupEditId == null) "新建步骤组" else "编辑步骤组") },
             text = {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     OutlinedTextField(
                         value = groupName,
                         onValueChange = { groupName = it },
@@ -438,29 +498,139 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     NumberFieldRow("循环次数", groupLoop) { groupLoop = it }
+
+                    // 新建时可勾选当前任务里已有的步骤，确定后这些步骤会被移入该步骤组。
+                    if (groupEditId == null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "选择要并入该步骤组的步骤（不选则创建空组）",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (topNodes.isEmpty()) {
+                            Text(
+                                "当前任务还没有步骤",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            topNodes.forEachIndexed { index, node ->
+                                when (node) {
+                                    is StepNode -> Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Checkbox(
+                                            checked = node.id in groupSelection,
+                                            onCheckedChange = { checked ->
+                                                groupSelection = if (checked) {
+                                                    groupSelection + node.id
+                                                } else {
+                                                    groupSelection - node.id
+                                                }
+                                            },
+                                        )
+                                        Text(
+                                            text = "#${index + 1} ${actionSummary(node.action)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+
+                                    is GroupNode -> Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Checkbox(checked = false, onCheckedChange = null, enabled = false)
+                                        Text(
+                                            text = "#${index + 1} [组] ${node.name.ifBlank { "步骤组" }}（步骤组暂不支持并入）",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val loop = parseInt(groupLoop, 1).coerceAtLeast(1)
-                        val name = groupName.ifBlank { "步骤组" }
-                        val cur = script?.nodes.orEmpty()
-                        if (groupEditId == null) {
-                            updateNodes(cur + GroupNode(id = Ids.newId(), name = name, loopCount = loop))
+                        val s = script
+                        if (s == null) {
+                            groupDialogOpen = false
                         } else {
-                            val id = groupEditId!!
-                            updateNodes(
-                                cur.updateNode(id) { n ->
+                            val loop = parseInt(groupLoop, 1).coerceAtLeast(1)
+                            val name = groupName.ifBlank { "步骤组" }
+                            val editingId = groupEditId
+                            val newNodes = if (editingId == null) {
+                                // 选中的顶层步骤（保持原顺序）移入新组，组插在第一个选中步骤的位置。
+                                val picked = s.nodes.filterIsInstance<StepNode>()
+                                    .filter { it.id in groupSelection }
+                                val rest = s.nodes.filterNot { it is StepNode && it.id in groupSelection }
+                                val firstPickedId = picked.firstOrNull()?.id
+                                val insertAt = if (firstPickedId == null) {
+                                    rest.size
+                                } else {
+                                    val firstIndex = s.nodes.indexOfFirst { it.id == firstPickedId }
+                                    s.nodes.take(firstIndex.coerceAtLeast(0))
+                                        .count { it !is StepNode || it.id !in groupSelection }
+                                }
+                                val group = GroupNode(
+                                    id = Ids.newId(),
+                                    name = name,
+                                    loopCount = loop,
+                                    children = picked,
+                                )
+                                rest.toMutableList().apply { add(insertAt.coerceIn(0, size), group) }
+                            } else {
+                                s.nodes.updateNode(editingId) { n ->
                                     if (n is GroupNode) n.copy(name = name, loopCount = loop) else n
-                                },
-                            )
+                                }
+                            }
+                            persist(s.copy(nodes = newNodes, updatedAt = System.currentTimeMillis()))
+                            groupDialogOpen = false
+                            groupSelection = emptySet()
                         }
-                        groupDialogOpen = false
                     },
                 ) { Text("确定") }
             },
-            dismissButton = { TextButton(onClick = { groupDialogOpen = false }) { Text("取消") } },
+            dismissButton = {
+                TextButton(onClick = { groupDialogOpen = false; groupSelection = emptySet() }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    // 重命名任务（悬浮球控制台的「重命名」入口也会直达这里）
+    if (renameDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { renameDialogOpen = false },
+            title = { Text("重命名任务") },
+            text = {
+                OutlinedTextField(
+                    value = renameName,
+                    onValueChange = { renameName = it },
+                    label = { Text("任务名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val s = script
+                        val newName = renameName.trim()
+                        if (s != null && newName.isNotBlank() && newName != s.name) {
+                            persist(s.copy(name = newName, updatedAt = System.currentTimeMillis()))
+                        }
+                        renameDialogOpen = false
+                    },
+                ) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { renameDialogOpen = false }) { Text("取消") } },
         )
     }
 

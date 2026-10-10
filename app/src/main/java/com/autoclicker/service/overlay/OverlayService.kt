@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.autoclicker.MainActivity
 import com.autoclicker.core.bus.LogEntry
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.PlaybackState
@@ -33,8 +34,8 @@ import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.service.capture.TemplateCaptureOverlay
 import com.autoclicker.service.record.Recorder
+import com.autoclicker.ui.EditorAction
 import com.autoclicker.ui.editor.actionSummary
-import com.autoclicker.ui.overlay.OverlayTaskEditor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -757,32 +758,37 @@ class OverlayService : Service() {
 
     // ---------------- 任务编辑入口 ----------------
 
-    private fun promptRenameTask() {
-        if (!RecordingSession.isActive) {
-            Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
-            return
-        }
-        // 悬浮窗里不能用 android.app.AlertDialog：Service 上下文没有窗口 token，
-        // show() 会抛 BadTokenException 直接崩掉进程（表现为悬浮球「自动结束」）。
-        // 统一改为打开悬浮窗内的编辑面板，用内联输入完成重命名。
-        OverlayTaskEditor.open(this, OverlayTaskEditor.StartMode.RENAME)
-    }
+    private fun promptRenameTask() = openEditorInApp(EditorAction.RENAME)
 
-    private fun openTaskEditor() {
-        if (!RecordingSession.isActive) {
-            Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
-            return
-        }
-        OverlayTaskEditor.open(this)
-    }
+    private fun openTaskEditor() = openEditorInApp(EditorAction.NONE)
 
-    private fun promptNewGroup() {
-        if (!RecordingSession.isActive) {
+    private fun promptNewGroup() = openEditorInApp(EditorAction.GROUP)
+
+    /**
+     * 任务编辑统一交给 App 自己的编辑器页面（Activity + Compose）。
+     *
+     * 不再在悬浮窗里挂 ComposeView：这类窗口既拿不到输入焦点（无法输入文字），
+     * 在部分机型上一挂载就整进程崩掉（表现为悬浮球/App 自动退出）。
+     * 控制台只保留轻量改动（延时 / 次数 / 上下移 / 删除），重编辑一律跳编辑器。
+     */
+    private fun openEditorInApp(action: String) {
+        val scriptId = RecordingSession.scriptId.value
+        if (scriptId.isNullOrBlank()) {
             Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
             return
         }
-        // 同上：用悬浮窗内的内联「新建步骤组」页面，替代会崩溃的 Service 对话框。
-        OverlayTaskEditor.open(this, OverlayTaskEditor.StartMode.GROUP)
+        // 悬浮窗在 App 之上，不收起会挡住编辑器界面。
+        hideConsole()
+        val intent = Intent(this, MainActivity::class.java)
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            )
+            .putExtra(MainActivity.EXTRA_EDITOR_SCRIPT_ID, scriptId)
+            .putExtra(MainActivity.EXTRA_EDITOR_ACTION, action)
+        runCatching { startActivity(intent) }
+            .onFailure { Toast.makeText(this, "打开编辑器失败：${it.message}", Toast.LENGTH_SHORT).show() }
     }
 
     private fun renderLogs(logs: List<LogEntry>) {

@@ -58,6 +58,18 @@ object RecordingSession {
         requestSave()
     }
 
+    /**
+     * App 内编辑器保存后，把最新内容同步回会话（名称 + 顶层步骤）。
+     *
+     * 悬浮窗控制台与编辑器共用本会话作为步骤数据源；不同步会出现「编辑器改了、悬浮窗还是旧的」，
+     * 且悬浮窗后续的改动会把整份旧列表覆盖回去。
+     */
+    fun syncFrom(script: Script) {
+        if (_scriptId.value != script.id) return
+        _scriptName.value = script.name
+        _nodes.value = script.nodes
+    }
+
     fun addNode(node: ScriptNode) {
         _nodes.value = _nodes.value + node
     }
