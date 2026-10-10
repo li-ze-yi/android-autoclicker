@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">自动按键点击</string>
+    <string name="accessibility_service_desc">用于自动执行点击、长按、滑动等手势，以及录制您的操作。本服务不会收集或上传任何界面内容。</string>
 </resources>

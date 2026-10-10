@@ -43,6 +43,17 @@ enum class RecordMode {
 }
 
 /**
+ * 无障碍服务连接状态（服务独立于引擎动作状态）。
+ */
+enum class AccessibilityState {
+    /** 无障碍服务未连接 */
+    Disconnected,
+
+    /** 无障碍服务已连接，可派发手势 */
+    Connected
+}
+
+/**
  * 非法的引擎状态迁移命令异常。
  *
  * 仅用于拒绝不合法的命令调用，不能作为正常流程的返回通道。
@@ -74,6 +85,10 @@ class AutomationBus {
     private val _recordingMode = MutableStateFlow(RecordMode.Normal)
     /** 录制模式，默认 [RecordMode.Normal]；仅录制状态下有意义 */
     val recordingMode: StateFlow<RecordMode> = _recordingMode.asStateFlow()
+
+    private val _accessibilityState = MutableStateFlow(AccessibilityState.Disconnected)
+    /** 无障碍服务连接状态，初始 [AccessibilityState.Disconnected] */
+    val accessibilityState: StateFlow<AccessibilityState> = _accessibilityState.asStateFlow()
 
     private val _eventMessages = MutableSharedFlow<String>(
         // 带缓冲：无订阅者时不丢弃、不阻塞发布方；缓冲溢出时淘汰最旧消息
@@ -197,6 +212,25 @@ class AutomationBus {
      */
     internal fun publishEvent(message: String) {
         _eventMessages.tryEmit(message)
+    }
+
+    /**
+     * 无障碍服务已连接：标记 [AccessibilityState.Connected]。
+     * 由 AccessibilityService.onServiceConnected 调用。
+     */
+    internal fun onAccessibilityConnected() {
+        _accessibilityState.value = AccessibilityState.Connected
+    }
+
+    /**
+     * 无障碍服务断开（被系统回收/用户关闭权限）：
+     * 标记 [AccessibilityState.Disconnected]，并强制回到 [EngineState.Idle]、清空脚本标识，
+     * 避免「状态显示运行中但已无法派发手势」的不一致。
+     */
+    internal fun onAccessibilityDisconnected() {
+        _accessibilityState.value = AccessibilityState.Disconnected
+        _engineState.value = EngineState.Idle
+        _activeScriptId.value = null
     }
 
     /** 状态的中文名，用于拼装面向用户的异常消息 */
