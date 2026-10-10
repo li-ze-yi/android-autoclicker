@@ -1,0 +1,617 @@
+package com.autoclicker.ui.editor
+
+import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.autoclicker.di.ServiceLocator
+import com.autoclicker.domain.model.Action
+import com.autoclicker.domain.model.FunctionPackage
+import com.autoclicker.domain.model.GroupNode
+import com.autoclicker.domain.model.Ids
+import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.Script
+import com.autoclicker.domain.model.ScriptNode
+import com.autoclicker.domain.model.StepNode
+import com.autoclicker.domain.model.TextGroup
+import com.autoclicker.domain.model.flattenSteps
+import com.autoclicker.domain.rule.StructureValidator
+import com.autoclicker.domain.rule.ValidationIssue
+import kotlinx.coroutines.launch
+
+/**
+ * 脚本编辑器：步骤列表、分组、参数配置、动作添加与校验保存。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var script by remember { mutableStateOf<Script?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var templates by remember { mutableStateOf<List<ImageTemplate>>(emptyList()) }
+    var packages by remember { mutableStateOf<List<FunctionPackage>>(emptyList()) }
+    var textGroups by remember { mutableStateOf<List<TextGroup>>(emptyList()) }
+    var expandedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    var pickerOpen by remember { mutableStateOf(false) }
+    var pickerCategory by remember { mutableStateOf<ActionCategory?>(null) }
+    var formRequest by remember { mutableStateOf<FormRequest?>(null) }
+    var configStepId by remember { mutableStateOf<String?>(null) }
+    var groupDialogOpen by remember { mutableStateOf(false) }
+    var groupEditId by remember { mutableStateOf<String?>(null) }
+    var groupName by remember { mutableStateOf("") }
+    var groupLoop by remember { mutableStateOf("1") }
+    var addParentId by remember { mutableStateOf<String?>(null) }
+    var issues by remember { mutableStateOf<List<ValidationIssue>?>(null) }
+
+    LaunchedEffect(scriptId) {
+        loading = true
+        script = runCatching { ServiceLocator.scripts.get(scriptId) }.getOrNull()
+        templates = runCatching { ServiceLocator.templates.list() }.getOrDefault(emptyList())
+        packages = runCatching { ServiceLocator.packages.list() }.getOrDefault(emptyList())
+        textGroups = runCatching { ServiceLocator.textGroups.list() }.getOrDefault(emptyList())
+        loading = false
+    }
+
+    val toast: (String) -> Unit = { msg ->
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    val updateNodes: (List<ScriptNode>) -> Unit = { newNodes ->
+        script = script?.copy(nodes = newNodes)
+    }
+
+    val save: () -> Unit = {
+        val s = script
+        if (s == null) {
+            toast("脚本未加载")
+        } else {
+            scope.launch {
+                val saved = s.copy(nodes = s.nodes, updatedAt = System.currentTimeMillis())
+                runCatching { ServiceLocator.scripts.save(saved) }
+                    .onFailure { toast("保存失败：${it.message}") }
+                script = saved
+                val known = packages.map { it.id }.toSet()
+                issues = StructureValidator.validateScript(saved, known)
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(script?.name ?: "脚本编辑") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = save) { Text("保存") }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            val s = script
+            if (loading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("加载中…")
+                }
+            } else if (s == null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("脚本不存在")
+                }
+            } else {
+                val nodes = s.nodes
+                val renderItems = remember(nodes, expandedGroups) { buildRenderList(nodes, expandedGroups) }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            addParentId = null
+                            pickerCategory = null
+                            pickerOpen = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("添加动作") }
+                    OutlinedButton(
+                        onClick = {
+                            groupEditId = null
+                            groupName = ""
+                            groupLoop = "1"
+                            groupDialogOpen = true
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("新建步骤组") }
+                }
+
+                if (renderItems.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("暂无步骤，点击「添加动作」", style = MaterialTheme.typography.bodyMedium)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(renderItems, key = { it.node.id }) { item ->
+                            when (val node = item.node) {
+                                is StepNode -> StepCard(
+                                    step = node,
+                                    depth = item.depth,
+                                    onMoveUp = { updateNodes(nodes.moveNode(node.id, -1)) },
+                                    onMoveDown = { updateNodes(nodes.moveNode(node.id, 1)) },
+                                    onEditAction = {
+                                        formRequest = FormRequest(node.action, node.id, null)
+                                    },
+                                    onConfig = { configStepId = node.id },
+                                    onDelete = { updateNodes(nodes.removeNode(node.id)) },
+                                )
+                                is GroupNode -> GroupCard(
+                                    group = node,
+                                    depth = item.depth,
+                                    expanded = node.id in expandedGroups,
+                                    onToggle = {
+                                        expandedGroups = if (node.id in expandedGroups) {
+                                            expandedGroups - node.id
+                                        } else {
+                                            expandedGroups + node.id
+                                        }
+                                    },
+                                    onAddChild = {
+                                        addParentId = node.id
+                                        pickerCategory = null
+                                        pickerOpen = true
+                                    },
+                                    onRename = {
+                                        groupEditId = node.id
+                                        groupName = node.name
+                                        groupLoop = node.loopCount.toString()
+                                        groupDialogOpen = true
+                                    },
+                                    onMoveUp = { updateNodes(nodes.moveNode(node.id, -1)) },
+                                    onMoveDown = { updateNodes(nodes.moveNode(node.id, 1)) },
+                                    onDelete = {
+                                        expandedGroups = expandedGroups - node.id
+                                        updateNodes(nodes.removeNode(node.id))
+                                    },
+                                )
+                            }
+                        }
+                        item { Spacer(Modifier.height(24.dp)) }
+                    }
+                }
+            }
+        }
+    }
+
+    // 动作选择底部弹层
+    if (pickerOpen) {
+        ModalBottomSheet(onDismissRequest = { pickerOpen = false; pickerCategory = null }) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                val category = pickerCategory
+                if (category == null) {
+                    Text("选择动作分类", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(modifier = Modifier.height(360.dp)) {
+                        items(ACTION_CATEGORIES, key = { it.title }) { cat ->
+                            Column {
+                                TextButton(
+                                    onClick = { pickerCategory = cat },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(cat.title, modifier = Modifier.weight(1f))
+                                    Text("${cat.entries.size} 项")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { pickerCategory = null }) { Text("← 分类") }
+                        Text(category.title, style = MaterialTheme.typography.titleMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(modifier = Modifier.height(360.dp)) {
+                        items(category.entries, key = { it.label }) { entry ->
+                            TextButton(
+                                onClick = {
+                                    pickerOpen = false
+                                    pickerCategory = null
+                                    formRequest = FormRequest(entry.create(), null, addParentId)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(entry.label, modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+
+    // 动作参数表单
+    val req = formRequest
+    if (req != null) {
+        ActionFormDialog(
+            initial = req.action,
+            templates = templates,
+            packages = packages,
+            textGroups = textGroups,
+            steps = script?.nodes?.flattenSteps().orEmpty(),
+            onConfirm = { newAction ->
+                val current = script?.nodes.orEmpty()
+                val newNodes = if (req.stepId != null) {
+                    current.updateNode(req.stepId) { n ->
+                        if (n is StepNode) n.copy(action = newAction) else n
+                    }
+                } else {
+                    current.appendTo(req.parentId, StepNode(id = Ids.newId(), action = newAction))
+                }
+                updateNodes(newNodes)
+                formRequest = null
+            },
+            onDismiss = { formRequest = null },
+        )
+    }
+
+    // 步骤设置
+    val currentScript = script
+    val configStep = configStepId?.let { id -> currentScript?.nodes?.flattenSteps()?.firstOrNull { it.id == id } }
+    if (configStep != null) {
+        StepConfigDialog(
+            step = configStep,
+            allSteps = currentScript?.nodes?.flattenSteps().orEmpty(),
+            onConfirm = { updated ->
+                updateNodes(currentScript?.nodes.orEmpty().updateNode(updated.id) { updated })
+                configStepId = null
+            },
+            onDismiss = { configStepId = null },
+        )
+    }
+
+    // 步骤组设置
+    if (groupDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { groupDialogOpen = false },
+            title = { Text(if (groupEditId == null) "新建步骤组" else "编辑步骤组") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = groupName,
+                        onValueChange = { groupName = it },
+                        label = { Text("组名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    NumberFieldRow("循环次数", groupLoop) { groupLoop = it }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val loop = parseInt(groupLoop, 1).coerceAtLeast(1)
+                        val name = groupName.ifBlank { "步骤组" }
+                        val cur = script?.nodes.orEmpty()
+                        if (groupEditId == null) {
+                            updateNodes(cur + GroupNode(id = Ids.newId(), name = name, loopCount = loop))
+                        } else {
+                            val id = groupEditId!!
+                            updateNodes(
+                                cur.updateNode(id) { n ->
+                                    if (n is GroupNode) n.copy(name = name, loopCount = loop) else n
+                                },
+                            )
+                        }
+                        groupDialogOpen = false
+                    },
+                ) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { groupDialogOpen = false }) { Text("取消") } },
+        )
+    }
+
+    // 校验结果
+    val issueList = issues
+    if (issueList != null) {
+        AlertDialog(
+            onDismissRequest = { issues = null },
+            title = { Text("校验结果") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                    if (issueList.isEmpty()) {
+                        Text("未发现问题")
+                    } else {
+                        issueList.forEach { issue ->
+                            val prefix = if (issue.level == ValidationIssue.Level.ERROR) "[错误]" else "[警告]"
+                            Text("$prefix ${issue.message}")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { issues = null }) { Text("关闭") } },
+        )
+    }
+}
+
+@Composable
+private fun StepCard(
+    step: StepNode,
+    depth: Int,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onEditAction: () -> Unit,
+    onConfig: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 16).dp, end = 8.dp),
+        colors = CardDefaults.cardColors(),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    actionSummary(step.action),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (!step.enabled) {
+                    Text("已禁用", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+            if (step.note.isNotBlank()) {
+                Text(step.note, style = MaterialTheme.typography.bodySmall)
+            }
+            Text(
+                "延时 ${step.delayAfterMs}ms · 次数 ${step.repeatCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onMoveUp, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
+                }
+                IconButton(onClick = onMoveDown, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
+                }
+                IconButton(onClick = onEditAction, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Edit, contentDescription = "编辑动作")
+                }
+                IconButton(onClick = onConfig, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Settings, contentDescription = "步骤设置")
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Delete, contentDescription = "删除")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupCard(
+    group: GroupNode,
+    depth: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onAddChild: () -> Unit,
+    onRename: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = (depth * 16).dp, end = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onToggle) { Text(if (expanded) "收起" else "展开") }
+                Text(
+                    "组：${group.name.ifBlank { group.id.take(6) }} · 循环 ${group.loopCount} 次 · ${group.children.size} 步",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onAddChild, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = "组内添加")
+                }
+                IconButton(onClick = onRename, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Edit, contentDescription = "编辑组")
+                }
+                IconButton(onClick = onMoveUp, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
+                }
+                IconButton(onClick = onMoveDown, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Delete, contentDescription = "删除")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepConfigDialog(
+    step: StepNode,
+    allSteps: List<StepNode>,
+    onConfirm: (StepNode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var delay by remember { mutableStateOf(step.delayAfterMs.toString()) }
+    var repeat by remember { mutableStateOf(step.repeatCount.toString()) }
+    var note by remember { mutableStateOf(step.note) }
+    var enabled by remember { mutableStateOf(step.enabled) }
+    var success by remember { mutableStateOf(step.onSuccessStepId) }
+    var failure by remember { mutableStateOf(step.onFailureStepId) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("步骤设置") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                NumberFieldRow("动作后延时（ms）", delay) { delay = it }
+                NumberFieldRow("执行次数", repeat) { repeat = it }
+                TextFieldRow("备注", note) { note = it }
+                BoolFieldRow("启用", enabled) { enabled = it }
+                val options = listOf<Pair<String?, String>>(null to "（继续下一步）") +
+                    allSteps.filter { it.id != step.id }.map { it.id to "${it.id.take(6)} · ${actionSummary(it.action)}" }
+                ChoiceField("成功跳转", success, options) { success = it }
+                ChoiceField("失败跳转", failure, options) { failure = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onConfirm(
+                        step.copy(
+                            delayAfterMs = parseLong(delay, step.delayAfterMs),
+                            repeatCount = parseInt(repeat, step.repeatCount).coerceAtLeast(1),
+                            note = note,
+                            enabled = enabled,
+                            onSuccessStepId = success,
+                            onFailureStepId = failure,
+                        ),
+                    )
+                },
+            ) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+private data class FormRequest(
+    val action: Action,
+    val stepId: String?,
+    val parentId: String?,
+)
+
+private data class RenderItem(
+    val node: ScriptNode,
+    val depth: Int,
+    val parentId: String?,
+    val indexInParent: Int,
+    val siblingCount: Int,
+)
+
+private fun buildRenderList(nodes: List<ScriptNode>, expanded: Set<String>): List<RenderItem> {
+    val out = ArrayList<RenderItem>()
+    fun walk(list: List<ScriptNode>, depth: Int, parentId: String?) {
+        list.forEachIndexed { index, node ->
+            out.add(RenderItem(node, depth, parentId, index, list.size))
+            if (node is GroupNode && node.id in expanded) {
+                walk(node.children, depth + 1, node.id)
+            }
+        }
+    }
+    walk(nodes, 0, null)
+    return out
+}
+
+private fun List<ScriptNode>.updateNode(id: String, transform: (ScriptNode) -> ScriptNode): List<ScriptNode> =
+    map { node ->
+        when {
+            node.id == id -> transform(node)
+            node is GroupNode -> node.copy(children = node.children.updateNode(id, transform))
+            else -> node
+        }
+    }
+
+private fun List<ScriptNode>.removeNode(id: String): List<ScriptNode> =
+    filterNot { it.id == id }.map { if (it is GroupNode) it.copy(children = it.children.removeNode(id)) else it }
+
+private fun List<ScriptNode>.moveNode(id: String, delta: Int): List<ScriptNode> {
+    val idx = indexOfFirst { it.id == id }
+    if (idx >= 0) {
+        val j = idx + delta
+        if (j !in indices) return this
+        val m = toMutableList()
+        val tmp = m[idx]
+        m[idx] = m[j]
+        m[j] = tmp
+        return m
+    }
+    return map { if (it is GroupNode) it.copy(children = it.children.moveNode(id, delta)) else it }
+}
+
+private fun List<ScriptNode>.appendTo(parentId: String?, node: ScriptNode): List<ScriptNode> =
+    if (parentId == null) {
+        this + node
+    } else {
+        map { if (it is GroupNode && it.id == parentId) it.copy(children = it.children + node) else it }
+    }
