@@ -112,7 +112,7 @@ class RegionPickerOverlay(
         column.addView(row)
         // 半透明深色底板，保证底部文字/按钮在任何画面上都可见
         column.background = roundRectBackground(
-            0xCC263238,
+            0xCC263238.toInt(),
             dpToPx(context, 12).toFloat(),
         )
         val padH = dpToPx(context, 18)
@@ -308,8 +308,8 @@ class RegionPickerOverlay(
     }
 
     private companion object {
-        /** 遮罩颜色：60% 黑 */
-        const val DIM_COLOR = 0x99000000
+        /** 半透明遮罩颜色（Int：颜色值超出 Int 正数范围，显式转换） */
+        val DIM_COLOR = 0x99000000.toInt()
 
         const val BOTTOM_MARGIN_DP = 28
         const val HINT_TEXT_SP = 13

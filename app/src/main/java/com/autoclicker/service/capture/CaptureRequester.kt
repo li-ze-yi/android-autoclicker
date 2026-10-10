@@ -119,15 +119,17 @@ class CaptureRequester {
         val data = result.data
 
         if (result.resultCode != Activity.RESULT_OK || data == null) {
-            current.takeIf { it.isActive }
-                .completeExceptionally(CaptureException("用户取消或拒绝了屏幕录制授权"))
+            if (current.isActive) {
+                current.completeExceptionally(CaptureException("用户取消或拒绝了屏幕录制授权"))
+            }
             return
         }
 
         val activity = host
         if (activity == null || activity.isFinishing || activity.isDestroyed) {
-            current.takeIf { it.isActive }
-                .completeExceptionally(CaptureException("页面已关闭，无法完成屏幕采集"))
+            if (current.isActive) {
+                current.completeExceptionally(CaptureException("页面已关闭，无法完成屏幕采集"))
+            }
             return
         }
 

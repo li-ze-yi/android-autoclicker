@@ -60,6 +60,12 @@
             android:name=".service.capture.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 持续投屏服务：一次授权持续出帧，供 WaitImage 识图等待轮询（Task 11） -->
+        <service
+            android:name=".service.capture.ContinuousCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
     </application>
 
 </manifest>

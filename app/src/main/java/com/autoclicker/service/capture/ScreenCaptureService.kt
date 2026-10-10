@@ -193,9 +193,9 @@ class ScreenCaptureService : Service() {
             MAX_IMAGES,
         )
         imageReader = reader
-        // 持续保存最近一帧：首帧可能为黑帧/合成中帧，稳定期后取最新帧更可靠
-        @Volatile
-        var latestBitmap: Bitmap? = null
+        // 持续保存最近一帧：首帧可能为黑帧/合成中帧，稳定期后取最新帧更可靠。
+        // 跨线程（handler 线程写、协程读），用 AtomicReference 保证可见性。
+        val latestBitmap = java.util.concurrent.atomic.AtomicReference<Bitmap>(null)
         reader.setOnImageAvailableListener({ r ->
             val image = runCatching { r.acquireLatestImage() }.getOrNull()
                 ?: return@setOnImageAvailableListener
@@ -204,43 +204,27 @@ class ScreenCaptureService : Service() {
                 .getOrNull()
                 ?: return@setOnImageAvailableListener
             // 替换并回收旧帧（此时结果尚未提交，外部无引用）
-            val old = latestBitmap
-            latestBitmap = bitmap
-            old?.takeIf { !it.isRecycled }?.recycle()
+            latestBitmap.getAndSet(bitmap)
+                ?.takeIf { !it.isRecycled }?.recycle()
             firstFrame.takeIf { it.isActive }?.complete(Unit)
         }, handler)
 
         // 整个会话只允许创建一次 VirtualDisplay（Android 14+ 硬约束）。
-        // 带 Handler 的重载为 API 33+；低版本用 7 参重载。
-        virtualDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            projection.createVirtualDisplay(
-                VIRTUAL_DISPLAY_NAME,
-                width,
-                height,
-                densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null,
-                handler,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            projection.createVirtualDisplay(
-                VIRTUAL_DISPLAY_NAME,
-                width,
-                height,
-                densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null,
-            )
-        }
+        virtualDisplay = createVirtualDisplayCompat(
+            projection = projection,
+            name = VIRTUAL_DISPLAY_NAME,
+            width = width,
+            height = height,
+            densityDpi = densityDpi,
+            surface = reader.surface,
+            handler = handler,
+        )
 
         // 等待首帧出图，最长 FRAME_TIMEOUT_MS，避免异常设备永久挂起
         withTimeout(FRAME_TIMEOUT_MS) { firstFrame.await() }
         // 稳定期：等合成器再刷若干帧，避开首帧黑屏/半合成帧
         delay(FRAME_SETTLE_MS)
-        val bitmap = latestBitmap
+        val bitmap = latestBitmap.get()
             ?: throw CaptureException("屏幕画面为空，请重试")
         auth.result.takeIf { it.isActive }?.complete(bitmap)
     }

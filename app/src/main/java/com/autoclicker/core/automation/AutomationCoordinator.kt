@@ -1,11 +1,15 @@
 package com.autoclicker.core.automation
 
 import com.autoclicker.MyApplication
+import com.autoclicker.core.data.templates.ImageTemplateRepository
 import com.autoclicker.core.engine.GestureExecutor
+import com.autoclicker.core.engine.ImageWaiter
 import com.autoclicker.core.engine.PackageResolver
 import com.autoclicker.core.engine.PlaybackControl
 import com.autoclicker.core.engine.PlaybackException
 import com.autoclicker.core.engine.ScriptPlayer
+import com.autoclicker.core.vision.AndroidImageWaiter
+import com.autoclicker.service.capture.ContinuousScreenSource
 import com.autoclicker.domain.model.RepeatPolicy
 import com.autoclicker.domain.model.TargetScriptMapper
 import kotlinx.coroutines.CoroutineScope
@@ -25,9 +29,20 @@ class AutomationCoordinator(private val app: MyApplication) {
 
     private val playbackControl = PlaybackControl()
 
+    /**
+     * 识图等待器（Task 11，FR-7）：基于持续投屏会话与模板仓库。
+     * 仅当脚本含 WaitImage 动作时才会被 ScriptPlayer 使用；
+     * 不含识图的脚本不会触发任何投屏相关操作，行为与此前一致。
+     */
+    private val imageWaiter: ImageWaiter = AndroidImageWaiter(
+        source = ContinuousScreenSource,
+        repository = ImageTemplateRepository(app),
+    )
+
     private val player = ScriptPlayer(
         gestureExecutor = gestureExecutor,
         packageResolver = packageResolver,
+        imageWaiter = imageWaiter,
         globalActions = com.autoclicker.service.accessibility.AndroidGlobalActions(),
     )
 

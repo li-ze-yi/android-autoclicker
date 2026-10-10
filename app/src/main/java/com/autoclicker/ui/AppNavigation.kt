@@ -112,6 +112,10 @@ fun AppNavigation() {
                     onBack = { navController.popBackStack() },
                 )
             }
+
+            composable(Routes.VISION_TEMPLATES) {
+                com.autoclicker.ui.templates.TemplatesScreen()
+            }
         }
     }
 }
