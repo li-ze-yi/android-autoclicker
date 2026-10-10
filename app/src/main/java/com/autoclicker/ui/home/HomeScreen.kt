@@ -185,28 +185,68 @@ fun HomeScreen(
     }
 }
 
-/** 录制入口卡片：选择普通/精确模式并开始录制 */
+/** 录制入口卡片：选择普通/精确模式并开始录制（模式持久化，I5） */
 @Composable
 private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.RecordMode) -> Unit) {
-    var mode by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(com.autoclicker.core.bus.RecordMode.Precise)
+    val context = LocalContext.current
+    val app = context.applicationContext as MyApplication
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // 从 DataStore 读持久化模式；切换时写回
+    var mode by androidx.compose.runtime.produceState(
+        initialValue = com.autoclicker.core.bus.RecordMode.Precise,
+    ) {
+        value = runCatching {
+            com.autoclicker.core.settings.SettingsRepository(app).getRecordMode()
+        }.getOrDefault(com.autoclicker.core.bus.RecordMode.Precise)
     }
+    var autoInterval by androidx.compose.runtime.produceState(initialValue = true) {
+        value = runCatching {
+            com.autoclicker.core.settings.SettingsRepository(app).getAutoRecordIntervalEnabled()
+        }.getOrDefault(true)
+    }
+
+    fun changeMode(next: com.autoclicker.core.bus.RecordMode) {
+        mode = next
+        uiScope.launch {
+            runCatching {
+                com.autoclicker.core.settings.SettingsRepository(app).setRecordMode(next)
+            }
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("录制操作", style = MaterialTheme.typography.titleMedium)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.RadioButton(
                     selected = mode == com.autoclicker.core.bus.RecordMode.Precise,
-                    onClick = { mode = com.autoclicker.core.bus.RecordMode.Precise },
+                    onClick = { changeMode(com.autoclicker.core.bus.RecordMode.Precise) },
                 )
                 Text("精确模式（录点击与滑动，坐标准）", Modifier.padding(start = 4.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.RadioButton(
                     selected = mode == com.autoclicker.core.bus.RecordMode.Normal,
-                    onClick = { mode = com.autoclicker.core.bus.RecordMode.Normal },
+                    onClick = { changeMode(com.autoclicker.core.bus.RecordMode.Normal) },
                 )
                 Text("普通模式（仅点击，零遮挡）", Modifier.padding(start = 4.dp))
+            }
+            // 自动记录间隔开关
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.Switch(
+                    checked = autoInterval,
+                    onCheckedChange = { value ->
+                        autoInterval = value
+                        uiScope.launch {
+                            runCatching {
+                                com.autoclicker.core.settings.SettingsRepository(app)
+                                    .setAutoRecordIntervalEnabled(value)
+                            }
+                        }
+                    },
+                )
+                Text("自动记录操作间隔", Modifier.padding(start = 8.dp))
             }
             OutlinedButton(
                 onClick = { onStart(mode) },

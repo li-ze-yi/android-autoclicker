@@ -123,18 +123,27 @@ class AutomationCoordinator(private val app: MyApplication) {
      * @param mode 普通（无障碍事件）/ 精确（全屏触摸捕获）
      */
     fun beginRecording(mode: com.autoclicker.core.bus.RecordMode) {
-        app.recorder.begin(mode)
-        // S3 修复：精确模式的触摸捕获层由 OverlayService 监听状态挂载，
-        // 必须先确保悬浮窗服务运行，否则进入 Recording 后无任何通道捕获触摸。
-        if (mode == com.autoclicker.core.bus.RecordMode.Precise) {
-            runCatching {
-                com.autoclicker.service.overlay.OverlayService.start(
-                    app,
-                    com.autoclicker.service.overlay.OverlayService.MODE_MULTI,
-                )
+        // I5：把录制模式持久化到 DataStore，并同步"自动间隔延时"开关给录制器
+        scope.launch {
+            val settings = com.autoclicker.core.settings.SettingsRepository(app)
+            runCatching { settings.setRecordMode(mode) }
+            val autoInterval = runCatching { settings.getAutoRecordIntervalEnabled() }
+                .getOrDefault(true)
+
+            app.recorder.autoInterval = autoInterval
+            app.recorder.begin(mode)
+            // S3 修复：精确模式的触摸捕获层由 OverlayService 监听状态挂载，
+            // 必须先确保悬浮窗服务运行，否则进入 Recording 后无任何通道捕获触摸。
+            if (mode == com.autoclicker.core.bus.RecordMode.Precise) {
+                runCatching {
+                    com.autoclicker.service.overlay.OverlayService.start(
+                        app,
+                        com.autoclicker.service.overlay.OverlayService.MODE_MULTI,
+                    )
+                }
             }
+            runCatching { app.bus.startRecording(mode) }
         }
-        scope.launch { runCatching { app.bus.startRecording(mode) } }
     }
 
     /** 结束录制：总线回空闲，已录步骤保留（供保存/回放） */
