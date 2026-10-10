@@ -120,6 +120,17 @@ object NccMatcher {
             f = if (f >= 4) 2 else 1
         }
 
+        if (bestScore < similarity) {
+            // 金字塔粗搜可能因模板与降采样网格未对齐而漏检（小模板尤其明显）：
+            // 回退为全分辨率全窗口精搜，保证不漏匹配。仅在快速路径未命中时才付此代价。
+            val full = searchLevel(sceneGray, rw, rh, tplGray, tw, th, 1, 0, 0, maxX, maxY)
+            if (full.score > bestScore) {
+                bestX = full.x
+                bestY = full.y
+                bestScore = full.score
+            }
+        }
+
         if (bestScore < similarity) return null
         // 返回匹配区域中心点，便于直接作为点击坐标
         return PixelPoint(rl + bestX + tw / 2, rt + bestY + th / 2)
