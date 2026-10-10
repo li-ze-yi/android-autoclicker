@@ -5,7 +5,6 @@ import android.view.accessibility.AccessibilityEvent
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.di.ServiceLocator
-import com.autoclicker.service.record.Recorder
 
 /**
  * 无障碍服务：持有手势/全局操作/节点查询/截屏能力的实现，并在连接与断开时注册/注销到 [ServiceLocator]。
@@ -40,9 +39,7 @@ class AutomationAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // 录制期间把事件旁路给录制器（无遮挡录制）；其余情况不消费事件。
-        val e = event ?: return
-        Recorder.current()?.onEvent(e)
+        // 精确录制基于悬浮层捕获原始触摸，不再依赖无障碍事件回调；此处不消费事件。
     }
 
     override fun onInterrupt() {
