@@ -193,22 +193,21 @@ private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.Rec
     val app = context.applicationContext as MyApplication
     val uiScope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // 从 DataStore 读持久化模式；切换时写回。produceState 返回可写 State，直接用 .value
-    val modeState = androidx.compose.runtime.produceState(
-        initialValue = com.autoclicker.core.bus.RecordMode.Precise,
-    ) {
-        value = runCatching {
-            com.autoclicker.core.settings.SettingsRepository(app).getRecordMode()
-        }.getOrDefault(com.autoclicker.core.bus.RecordMode.Precise)
+    // 从 DataStore 读持久化模式（本地可写状态 + 首次异步加载），切换时写回
+    var mode by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(com.autoclicker.core.bus.RecordMode.Precise)
     }
-    val autoIntervalState = androidx.compose.runtime.produceState(initialValue = true) {
-        value = runCatching {
-            com.autoclicker.core.settings.SettingsRepository(app).getAutoRecordIntervalEnabled()
-        }.getOrDefault(true)
+    var autoInterval by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(true)
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val settings = com.autoclicker.core.settings.SettingsRepository(app)
+        runCatching { settings.getRecordMode() }.onSuccess { mode = it }
+        runCatching { settings.getAutoRecordIntervalEnabled() }.onSuccess { autoInterval = it }
     }
 
     fun changeMode(next: com.autoclicker.core.bus.RecordMode) {
-        modeState.value = next
+        mode = next
         uiScope.launch {
             runCatching {
                 com.autoclicker.core.settings.SettingsRepository(app).setRecordMode(next)
@@ -221,14 +220,14 @@ private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.Rec
             Text("录制操作", style = MaterialTheme.typography.titleMedium)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.RadioButton(
-                    selected = modeState.value == com.autoclicker.core.bus.RecordMode.Precise,
+                    selected = mode == com.autoclicker.core.bus.RecordMode.Precise,
                     onClick = { changeMode(com.autoclicker.core.bus.RecordMode.Precise) },
                 )
                 Text("精确模式（录点击与滑动，坐标准）", Modifier.padding(start = 4.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.RadioButton(
-                    selected = modeState.value == com.autoclicker.core.bus.RecordMode.Normal,
+                    selected = mode == com.autoclicker.core.bus.RecordMode.Normal,
                     onClick = { changeMode(com.autoclicker.core.bus.RecordMode.Normal) },
                 )
                 Text("普通模式（仅点击，零遮挡）", Modifier.padding(start = 4.dp))
@@ -236,9 +235,9 @@ private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.Rec
             // 自动记录间隔开关
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.Switch(
-                    checked = autoIntervalState.value,
+                    checked = autoInterval,
                     onCheckedChange = { value ->
-                        autoIntervalState.value = value
+                        autoInterval = value
                         uiScope.launch {
                             runCatching {
                                 com.autoclicker.core.settings.SettingsRepository(app)
@@ -250,7 +249,7 @@ private fun RecordEntry(enabled: Boolean, onStart: (com.autoclicker.core.bus.Rec
                 Text("自动记录操作间隔", Modifier.padding(start = 8.dp))
             }
             OutlinedButton(
-                onClick = { onStart(modeState.value) },
+                onClick = { onStart(mode) },
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("开始录制") }

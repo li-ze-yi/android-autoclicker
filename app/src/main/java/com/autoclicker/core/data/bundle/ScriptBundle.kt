@@ -13,9 +13,9 @@ import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptStep
 import com.autoclicker.domain.validate.StructureValidator
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.decodeFromString
-import kotlinx.serialization.json.encodeToString
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -28,6 +28,7 @@ import java.util.ArrayDeque
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
+import kotlin.text.Charsets
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
@@ -492,7 +493,7 @@ class ScriptBundle(context: Context) {
      * 注意：路径常量需与 ImageTemplateRepository 的存储约定（filesDir/templates/<id>.png）保持一致。
      */
     private fun templatePngFile(templateId: String): File =
-        File(appContext.filesDir, TEMPLATE_DIR_NAME, "$templateId.png")
+        File(File(appContext.filesDir, TEMPLATE_DIR_NAME), "$templateId.png")
 
     /** 导入结果的中文汇总文案 */
     private fun buildSummaryZh(
