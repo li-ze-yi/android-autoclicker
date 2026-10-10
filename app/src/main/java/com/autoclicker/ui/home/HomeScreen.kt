@@ -139,6 +139,12 @@ fun HomeScreen(
                 Spacer(Modifier.size(6.dp))
                 Text("分享导入")
             }
+            Text(
+                "新建任务后，可在任务内点「录制到本任务」开始录制",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
 
             if (scripts.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

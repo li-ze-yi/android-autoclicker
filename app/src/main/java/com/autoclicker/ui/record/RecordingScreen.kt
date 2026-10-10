@@ -1,6 +1,8 @@
 package com.autoclicker.ui.record
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -33,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +50,7 @@ import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
+import com.autoclicker.core.flow.RecordFlow
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Action
@@ -55,7 +59,6 @@ import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.GestureAction
 import com.autoclicker.domain.model.GlobalKeyAction
-import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.InputTextAction
 import com.autoclicker.domain.model.JumpAction
 import com.autoclicker.domain.model.LongPressAction
@@ -68,9 +71,11 @@ import com.autoclicker.service.record.Recorder
 import kotlinx.coroutines.launch
 
 /**
- * 录制页：订阅 [RecorderBus.steps] 展示实时采集到的步骤，可编辑步参数并保存为任务。
+ * 录制页：一条龙流程的入口。
  *
- * 录制开关委托给 [Recorder] 的静态方法（start/pause/stop），由录制服务实现。
+ * 「建任务 → 检查/跳转权限 → 弹悬浮球 → 录制入库」由 [RecordFlow] 编排，
+ * 本页负责触发、展示实时步骤（订阅 [RecorderBus.steps]）与编辑步参数；
+ * 点击「停止」即调用 [RecordFlow.finishAndClose] 停止录制并关闭悬浮球。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,8 +92,59 @@ fun RecordingScreen(onBack: () -> Unit) {
     var scriptList by remember { mutableStateOf<List<Script>>(emptyList()) }
     var listLoading by remember { mutableStateOf(false) }
 
+    // 待重试的入口参数：权限设置页返回后据此重试；最多连续跳转 2 次。
+    var retryName by remember { mutableStateOf<String?>(null) }
+    var retryScript by remember { mutableStateOf<Script?>(null) }
+    var redirectCount by remember { mutableStateOf(0) }
+    var retryTick by remember { mutableStateOf(0) }
+
     val toast: (String) -> Unit = { msg ->
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    // 权限设置页返回：只自增计数，真正的重试放在后面的 LaunchedEffect 中（避免前向引用局部函数）。
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        retryTick++
+    }
+
+    val promptPermission: (PermissionChecker.Kind, String?, Script?) -> Unit = { kind, name, script ->
+        if (redirectCount >= 2) {
+            toast("仍缺少「${PermissionChecker.kindLabel(kind)}」，请手动开启后再试")
+        } else {
+            redirectCount++
+            retryName = name
+            retryScript = script
+            toast("请先开启${PermissionChecker.kindLabel(kind)}，已为你打开设置页")
+            permissionLauncher.launch(PermissionChecker.settingsIntent(context, kind))
+        }
+    }
+
+    val handleResult: (RecordFlow.StartResult, String?, Script?) -> Unit = { result, name, script ->
+        when (result) {
+            is RecordFlow.StartResult.NeedPermission -> promptPermission(result.kind, name, script)
+            is RecordFlow.StartResult.Started -> {
+                redirectCount = 0
+                toast(
+                    if (name != null) "已创建任务并开始录制，悬浮球已弹出"
+                    else "已绑定任务并开始录制，悬浮球已弹出"
+                )
+            }
+            is RecordFlow.StartResult.Failed -> toast("操作失败：${result.message}")
+        }
+    }
+
+    LaunchedEffect(retryTick) {
+        if (retryTick == 0) return@LaunchedEffect
+        val name = retryName
+        val script = retryScript
+        retryName = null
+        retryScript = null
+        when {
+            name != null -> handleResult(RecordFlow.createTaskAndRecord(context, name), name, null)
+            script != null -> handleResult(RecordFlow.bindAndRecord(context, script), null, script)
+        }
     }
 
     Scaffold(
@@ -107,20 +163,6 @@ fun RecordingScreen(onBack: () -> Unit) {
                 },
             )
         },
-        bottomBar = {
-            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            val ok = RecordingSession.saveNow()
-                            toast(if (ok) "已保存到任务" else "未绑定任务或保存失败")
-                        }
-                    },
-                    enabled = steps.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("保存到任务") }
-            }
-        },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             Text(
@@ -136,6 +178,7 @@ fun RecordingScreen(onBack: () -> Unit) {
                     Button(
                         onClick = {
                             newTaskName = ""
+                            redirectCount = 0
                             showNewDialog = true
                         },
                         modifier = Modifier.weight(1f),
@@ -156,17 +199,13 @@ fun RecordingScreen(onBack: () -> Unit) {
             }
             RecordingControls(
                 recording = recording,
-                onStart = start@{
-                    if (!PermissionChecker.requireAccessibility(context)) return@start
-                    if (!PermissionChecker.requireOverlay(context)) return@start
-                    if (!RecordingSession.isActive) {
-                        toast("请先创建或选择任务")
-                        return@start
-                    }
-                    Recorder.start(context)
-                },
                 onPause = { Recorder.pause(context) },
-                onStop = { Recorder.stop(context) },
+                onStop = {
+                    scope.launch {
+                        RecordFlow.finishAndClose(context)
+                        toast("已保存到任务并关闭悬浮球")
+                    }
+                },
                 onPick = pick@{
                     if (!PermissionChecker.requireOverlay(context)) return@pick
                     Recorder.pickPoint(context)
@@ -204,13 +243,10 @@ fun RecordingScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     val name = newTaskName.trim().ifBlank { "录制任务" }
-                    val script = Script(id = Ids.newId(), name = name)
                     showNewDialog = false
+                    redirectCount = 0
                     scope.launch {
-                        runCatching { ServiceLocator.scripts.save(script) }
-                            .onFailure { toast("创建任务失败：${it.message}") }
-                        RecordingSession.begin(script)
-                        toast("已绑定任务：$name")
+                        handleResult(RecordFlow.createTaskAndRecord(context, name), name, null)
                     }
                 }) { Text("确定") }
             },
@@ -234,9 +270,15 @@ fun RecordingScreen(onBack: () -> Unit) {
                         items(scriptList, key = { it.id }) { script ->
                             TextButton(
                                 onClick = {
-                                    RecordingSession.begin(script)
                                     showPickDialog = false
-                                    toast("已绑定任务：${script.name}")
+                                    redirectCount = 0
+                                    scope.launch {
+                                        handleResult(
+                                            RecordFlow.bindAndRecord(context, script),
+                                            null,
+                                            script,
+                                        )
+                                    }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
@@ -256,7 +298,6 @@ fun RecordingScreen(onBack: () -> Unit) {
 @Composable
 private fun RecordingControls(
     recording: RecordingState,
-    onStart: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
     onPick: () -> Unit,
@@ -272,7 +313,6 @@ private fun RecordingControls(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
-            Button(onClick = onStart, enabled = recording == RecordingState.IDLE) { Text("开始") }
             OutlinedButton(
                 onClick = onPause,
                 enabled = recording != RecordingState.IDLE,

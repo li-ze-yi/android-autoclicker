@@ -1,6 +1,10 @@
 package com.autoclicker.ui.editor
 
+import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +56,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.autoclicker.core.bus.RecordingSession
+import com.autoclicker.core.flow.RecordFlow
+import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.Action
 import com.autoclicker.domain.model.FunctionPackage
@@ -65,7 +71,6 @@ import com.autoclicker.domain.model.TextGroup
 import com.autoclicker.domain.model.flattenSteps
 import com.autoclicker.domain.rule.StructureValidator
 import com.autoclicker.domain.rule.ValidationIssue
-import com.autoclicker.service.record.Recorder
 import kotlinx.coroutines.launch
 
 /**
@@ -96,6 +101,10 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
     var groupLoop by remember { mutableStateOf("1") }
     var addParentId by remember { mutableStateOf<String?>(null) }
     var issues by remember { mutableStateOf<List<ValidationIssue>?>(null) }
+    // 权限跳转后待重试开始录制的脚本
+    var pendingRetry by remember { mutableStateOf<Script?>(null) }
+    // 已连续跳转权限设置页的次数（上限 2，避免死循环）
+    var permissionRedirects by remember { mutableStateOf(0) }
 
     LaunchedEffect(scriptId) {
         loading = true
@@ -109,6 +118,43 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
     val toast: (String) -> Unit = { msg ->
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     }
+
+    // 权限设置页返回后：若存在待重试脚本则再次尝试开始录制；仍缺权限时最多再跳转一次
+    var permissionLauncherHolder: ActivityResultLauncher<Intent>? = null
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        val retry = pendingRetry
+        if (retry != null) {
+            scope.launch {
+                when (val result = RecordFlow.bindAndRecord(context, retry)) {
+                    is RecordFlow.StartResult.Started -> {
+                        pendingRetry = null
+                        permissionRedirects = 0
+                        script = runCatching { ServiceLocator.scripts.get(scriptId) }.getOrNull() ?: script
+                        toast("已开始录制到本任务，悬浮球已弹出")
+                    }
+                    is RecordFlow.StartResult.NeedPermission -> {
+                        if (permissionRedirects >= 2) {
+                            pendingRetry = null
+                            toast("仍缺少${PermissionChecker.kindLabel(result.kind)}权限，请手动开启后再试")
+                        } else {
+                            permissionRedirects++
+                            toast("请开启${PermissionChecker.kindLabel(result.kind)}权限")
+                            permissionLauncherHolder?.launch(
+                                PermissionChecker.settingsIntent(context, result.kind),
+                            )
+                        }
+                    }
+                    is RecordFlow.StartResult.Failed -> {
+                        pendingRetry = null
+                        toast(result.message)
+                    }
+                }
+            }
+        }
+    }
+    permissionLauncherHolder = permissionLauncher
 
     val updateNodes: (List<ScriptNode>) -> Unit = { newNodes ->
         script = script?.copy(nodes = newNodes)
@@ -144,9 +190,8 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                     TextButton(
                         onClick = {
                             if (recordingThis) {
-                                Recorder.stop(context)
                                 scope.launch {
-                                    RecordingSession.finish()
+                                    RecordFlow.finishAndClose(context)
                                     script = runCatching { ServiceLocator.scripts.get(scriptId) }
                                         .getOrNull() ?: script
                                     val suffix = recordingScriptName?.let { "：$it" } ?: ""
@@ -162,9 +207,22 @@ fun ScriptEditorScreen(scriptId: String, onBack: () -> Unit) {
                                         runCatching { ServiceLocator.scripts.save(saved) }
                                             .onFailure { toast("保存失败：${it.message}") }
                                         script = saved
-                                        RecordingSession.begin(saved)
-                                        Recorder.start(context)
-                                        toast("已开始录制到本任务")
+                                        when (val result = RecordFlow.bindAndRecord(context, saved)) {
+                                            is RecordFlow.StartResult.Started -> {
+                                                pendingRetry = null
+                                                permissionRedirects = 0
+                                                toast("已开始录制到本任务，悬浮球已弹出")
+                                            }
+                                            is RecordFlow.StartResult.NeedPermission -> {
+                                                pendingRetry = saved
+                                                permissionRedirects = 1
+                                                toast("请先开启${PermissionChecker.kindLabel(result.kind)}权限")
+                                                permissionLauncher.launch(
+                                                    PermissionChecker.settingsIntent(context, result.kind),
+                                                )
+                                            }
+                                            is RecordFlow.StartResult.Failed -> toast(result.message)
+                                        }
                                     }
                                 }
                             }

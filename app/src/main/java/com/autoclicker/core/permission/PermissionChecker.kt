@@ -2,7 +2,9 @@ package com.autoclicker.core.permission
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
@@ -62,6 +64,42 @@ object PermissionChecker {
 
     /** 需要悬浮窗的动作守卫（悬浮球/取点/截图裁剪层）。返回 true 表示可以继续。 */
     fun requireOverlay(context: Context): Boolean = !showBlocker(context, overlayBlocker(context))
+
+    // ---------------- 自动跳转 ----------------
+
+    /** 自动化流程所需的权限种类。 */
+    enum class Kind { ACCESSIBILITY, OVERLAY }
+
+    /** 返回首个缺失的权限；null 表示都已具备。 */
+    fun firstMissing(context: Context): Kind? = when {
+        !isAccessibilityEnabled(context) -> Kind.ACCESSIBILITY
+        !isOverlayGranted(context) -> Kind.OVERLAY
+        else -> null
+    }
+
+    /** 对应权限的系统设置页 Intent（带 NEW_TASK，便于从任意 Context 启动）。 */
+    fun settingsIntent(context: Context, kind: Kind): Intent {
+        val intent = when (kind) {
+            Kind.ACCESSIBILITY -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            Kind.OVERLAY -> Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            )
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return intent
+    }
+
+    /** 自动跳转到对应权限设置页。 */
+    fun openSettings(context: Context, kind: Kind) {
+        runCatching { context.startActivity(settingsIntent(context, kind)) }
+            .onFailure { RuntimeBus.log(LogLevel.WARN, "无法打开权限设置页：${it.message}") }
+    }
+
+    fun kindLabel(kind: Kind): String = when (kind) {
+        Kind.ACCESSIBILITY -> "无障碍服务"
+        Kind.OVERLAY -> "悬浮窗"
+    }
 
     private fun showBlocker(context: Context, reason: String?): Boolean {
         if (reason == null) return false

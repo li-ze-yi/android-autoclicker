@@ -23,6 +23,7 @@ import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
+import com.autoclicker.service.overlay.OverlayService
 import com.autoclicker.domain.model.ClickAction
 import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.LongPressAction
@@ -129,12 +130,16 @@ class Recorder(private val appContext: Context) {
         settingsScope = null
         RuntimeBus.setRecording(RecordingState.IDLE)
         RuntimeBus.log("录制已结束")
-        // 停止录制后把这一轮的步骤写回任务；保持会话有效，用户可继续录第二轮。
+        // 停止录制后把这一轮的步骤写回任务，然后关闭悬浮球（「录完即收」）。
         saveScope.launch {
             val ok = runCatching { RecordingSession.saveNow() }.getOrDefault(false)
             if (ok) {
                 RuntimeBus.log("录制已保存到任务「${RecordingSession.scriptName.value}」")
+            } else {
+                RuntimeBus.log(LogLevel.WARN, "录制保存失败或未绑定任务")
             }
+            runCatching { OverlayService.stop(appContext) }
+            RuntimeBus.log("悬浮球已关闭")
         }
     }
 
