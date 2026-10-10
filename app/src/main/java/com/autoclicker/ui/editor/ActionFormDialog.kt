@@ -279,11 +279,21 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
                 if (!PermissionChecker.requireOverlay(context)) return@capture
                 // 截图前先收起悬浮窗，避免悬浮球被截进画面。
                 OverlayService.enterCaptureMode(context)
-                TemplateCaptureOverlay.start(context) { template ->
+                TemplateCaptureOverlay.start(context) { template, region ->
                     OverlayService.exitCaptureMode(context)
                     if (template != null) {
                         extraTemplates = extraTemplates + template
                         templateId = template.id
+                        // 截图时框选的识别区域直接写回表单；未框选（全屏）则清除限定。
+                        if (region != null) {
+                            regionEnabled = true
+                            l = formatPercent(region.l)
+                            t = formatPercent(region.t)
+                            r = formatPercent(region.r)
+                            b = formatPercent(region.b)
+                        } else {
+                            regionEnabled = false
+                        }
                         emit()
                     }
                 }

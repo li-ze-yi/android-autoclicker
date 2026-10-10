@@ -106,7 +106,7 @@ fun TemplatesScreen() {
                     if (!PermissionChecker.requireOverlay(context)) return@capture
                     // 截图前先收起悬浮窗，避免悬浮球被截进画面。
                     OverlayService.enterCaptureMode(context)
-                    TemplateCaptureOverlay.start(context) { template ->
+                    TemplateCaptureOverlay.start(context) { template, _ ->
                         OverlayService.exitCaptureMode(context)
                         if (template != null) {
                             scope.launch { templates = ServiceLocator.templates.list() }

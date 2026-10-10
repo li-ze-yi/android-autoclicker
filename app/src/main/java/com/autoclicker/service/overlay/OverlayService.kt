@@ -499,7 +499,7 @@ class OverlayService : Service() {
         templateRow.addView(button("截图建模板") {
             if (!PermissionChecker.requireOverlay(this)) return@button
             enterCaptureMode()
-            TemplateCaptureOverlay.start(this) { template ->
+            TemplateCaptureOverlay.start(this) { template, _ ->
                 exitCaptureMode()
                 if (template != null) RuntimeBus.log("控制台：已添加模板「${template.name}」")
             }

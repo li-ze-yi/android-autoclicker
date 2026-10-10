@@ -24,22 +24,47 @@ import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.domain.model.Action
+import com.autoclicker.domain.model.AreaRandomClickAction
+import com.autoclicker.domain.model.CallFunctionAction
 import com.autoclicker.domain.model.ClickAction
+import com.autoclicker.domain.model.ClickColorAction
+import com.autoclicker.domain.model.ClickImageAction
+import com.autoclicker.domain.model.ClickNodeAction
+import com.autoclicker.domain.model.ClickTextAction
 import com.autoclicker.domain.model.CloseAppAction
+import com.autoclicker.domain.model.ConditionAction
 import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
+import com.autoclicker.domain.model.ExtractContentAction
+import com.autoclicker.domain.model.FunctionPackage
+import com.autoclicker.domain.model.GestureAction
+import com.autoclicker.domain.model.GestureStroke
 import com.autoclicker.domain.model.GlobalKeyAction
 import com.autoclicker.domain.model.GlobalKeyName
 import com.autoclicker.domain.model.GroupNode
 import com.autoclicker.domain.model.Ids
+import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.InputTextAction
+import com.autoclicker.domain.model.JumpAction
 import com.autoclicker.domain.model.LongPressAction
+import com.autoclicker.domain.model.NodeSelector
 import com.autoclicker.domain.model.OpenAppAction
 import com.autoclicker.domain.model.PercentPoint
+import com.autoclicker.domain.model.PercentRect
+import com.autoclicker.domain.model.PopupAction
 import com.autoclicker.domain.model.RepeatClickAction
 import com.autoclicker.domain.model.ScriptNode
+import com.autoclicker.domain.model.SpeakAction
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.domain.model.SwipeAction
+import com.autoclicker.domain.model.TextSource
 import com.autoclicker.domain.model.ToastAction
+import com.autoclicker.domain.model.VariableOpAction
+import com.autoclicker.di.ServiceLocator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import com.autoclicker.ui.EditorAction
 import com.autoclicker.ui.editor.actionSummary
 import kotlin.math.roundToInt
@@ -464,6 +489,57 @@ object OverlayStepEditor {
                 })
             }
 
+            is AreaRandomClickAction -> {
+                percent("左", action.rect.l) { v ->
+                    updateActionTyped<AreaRandomClickAction>(stepId) { it.copy(rect = it.rect.copy(l = v)) }
+                }
+                percent("上", action.rect.t) { v ->
+                    updateActionTyped<AreaRandomClickAction>(stepId) { it.copy(rect = it.rect.copy(t = v)) }
+                }
+                percent("右", action.rect.r) { v ->
+                    updateActionTyped<AreaRandomClickAction>(stepId) { it.copy(rect = it.rect.copy(r = v)) }
+                }
+                percent("下", action.rect.b) { v ->
+                    updateActionTyped<AreaRandomClickAction>(stepId) { it.copy(rect = it.rect.copy(b = v)) }
+                }
+            }
+
+            is ClickTextAction -> text("文字", action.text) { v ->
+                updateActionTyped<ClickTextAction>(stepId) { it.copy(text = v) }
+            }
+
+            is InputTextAction -> text("文本", action.source.literal) { v ->
+                updateActionTyped<InputTextAction>(stepId) { it.copy(source = it.source.copy(literal = v)) }
+            }
+
+            is PopupAction -> {
+                text("标题", action.title) { v ->
+                    updateActionTyped<PopupAction>(stepId) { it.copy(title = v) }
+                }
+                text("内容", action.message) { v ->
+                    updateActionTyped<PopupAction>(stepId) { it.copy(message = v) }
+                }
+            }
+
+            is SpeakAction -> text("内容", action.message) { v ->
+                updateActionTyped<SpeakAction>(stepId) { it.copy(message = v) }
+            }
+
+            is JumpAction -> {
+                row.addView(fieldLabel("跳转到"))
+                row.addView(
+                    smallButton(if (action.mode == com.autoclicker.domain.model.JumpMode.END_TASK) "结束任务" else "指定步骤") {
+                        val next = if (action.mode == com.autoclicker.domain.model.JumpMode.END_TASK) {
+                            com.autoclicker.domain.model.JumpMode.STEP
+                        } else {
+                            com.autoclicker.domain.model.JumpMode.END_TASK
+                        }
+                        updateActionTyped<JumpAction>(stepId) { it.copy(mode = next) }
+                        render()
+                    },
+                )
+            }
+
             else -> return null
         }
         return row
@@ -471,16 +547,44 @@ object OverlayStepEditor {
 
     // ---------------- 添加动作 ----------------
 
+    /** 编辑器自身的协程域：用于异步加载模板 / 函数包列表（object 常驻，任务短，结束后自然回收）。 */
+    private val pickerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * 全部可添加的动作（与 Action.kt 的全集一一对应）。
+     * 「点击图片」「调用函数」需要先选模板 / 函数包，单独走选择器，不在此表内。
+     */
     private val quickActions: List<Pair<String, () -> Action>> = listOf(
         "点击坐标" to { ClickAction(PercentPoint(0.5f, 0.5f)) },
         "长按" to { LongPressAction(PercentPoint(0.5f, 0.5f)) },
         "连续点击" to { RepeatClickAction(PercentPoint(0.5f, 0.5f)) },
+        "区域随机点击" to { AreaRandomClickAction(PercentRect(0.4f, 0.4f, 0.6f, 0.6f)) },
+        "点击颜色" to { ClickColorAction(color = 0xFFFF0000.toInt()) },
+        "点击文字" to { ClickTextAction(text = "") },
+        "点击节点" to { ClickNodeAction(selector = NodeSelector()) },
+        "手势" to {
+            GestureAction(
+                listOf(
+                    GestureStroke(
+                        listOf(PercentPoint(0.5f, 0.8f), PercentPoint(0.5f, 0.2f)),
+                    ),
+                ),
+            )
+        },
         "滑动" to { SwipeAction(PercentPoint(0.5f, 0.8f), PercentPoint(0.5f, 0.2f)) },
-        "延时" to { DelayAction() },
         "返回键" to { GlobalKeyAction(GlobalKeyName.BACK) },
         "返回桌面" to { GlobalKeyAction(GlobalKeyName.HOME) },
+        "最近任务" to { GlobalKeyAction(GlobalKeyName.RECENTS) },
         "打开应用" to { OpenAppAction(packageName = "") },
         "关闭应用" to { CloseAppAction(packageName = "") },
+        "输入文字" to { InputTextAction(source = TextSource()) },
+        "内容提取" to { ExtractContentAction(targetVar = "result") },
+        "变量操作" to { VariableOpAction(varName = "var1") },
+        "条件判断" to { ConditionAction() },
+        "跳转" to { JumpAction() },
+        "延时" to { DelayAction() },
+        "弹窗提示" to { PopupAction(message = "") },
+        "语音播报" to { SpeakAction(message = "") },
         "Toast 提示" to { ToastAction(message = "") },
         "占位注释" to { EmptyAction(note = "") },
     )
@@ -498,6 +602,13 @@ object OverlayStepEditor {
         body.addView(content)
         panel.addView(body)
         content.addView(hintText("选择要添加的动作（添加后可在此直接改参数/延时）"))
+        // 需要先选资源的两类动作放最前。
+        content.addView(
+            smallButton("点击图片（先选模板）") { showTemplatePicker() },
+        )
+        content.addView(
+            smallButton("调用函数（先选函数包）") { showPackagePicker() },
+        )
         quickActions.forEach { (label, factory) ->
             content.addView(
                 smallButton(label) {
@@ -513,6 +624,80 @@ object OverlayStepEditor {
             render()
         })
         panel.addView(footer)
+    }
+
+    /** 「点击图片」的模板选择器：面板内列出现有模板，点选后追加 ClickImageAction。 */
+    private fun showTemplatePicker() {
+        val panel = root ?: return
+        val context = appContext ?: return
+        pickerScope.launch {
+            val templates = runCatching { ServiceLocator.templates.list() }.getOrElse { emptyList() }
+            if (!active) return@launch
+            panel.removeAllViews()
+            panel.addView(buildHeader(context))
+            val body = ScrollView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            body.addView(content)
+            panel.addView(body)
+            if (templates.isEmpty()) {
+                content.addView(hintText("还没有图像模板：请先在控制台「截图建模板」创建，再回来添加"))
+            } else {
+                content.addView(hintText("选择要点击的模板："))
+                templates.forEach { template: ImageTemplate ->
+                    content.addView(
+                        smallButton(template.name) {
+                            RecordingSession.addNode(
+                                StepNode(Ids.newId(), ClickImageAction(templateId = template.id)),
+                            )
+                            mode = Mode.LIST
+                            render()
+                        },
+                    )
+                }
+            }
+            val footer = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            footer.addView(smallButton("返回") { showAddActionPicker() })
+            panel.addView(footer)
+        }
+    }
+
+    /** 「调用函数」的函数包选择器：面板内列出现有函数包，点选后追加 CallFunctionAction。 */
+    private fun showPackagePicker() {
+        val panel = root ?: return
+        val context = appContext ?: return
+        pickerScope.launch {
+            val packages = runCatching { ServiceLocator.packages.list() }.getOrElse { emptyList() }
+            if (!active) return@launch
+            panel.removeAllViews()
+            panel.addView(buildHeader(context))
+            val body = ScrollView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            body.addView(content)
+            panel.addView(body)
+            if (packages.isEmpty()) {
+                content.addView(hintText("还没有函数包：请先在 App 内「函数包」页创建，再回来添加"))
+            } else {
+                content.addView(hintText("选择要调用的函数包："))
+                packages.forEach { pkg: FunctionPackage ->
+                    content.addView(
+                        smallButton(pkg.name) {
+                            RecordingSession.addNode(
+                                StepNode(Ids.newId(), CallFunctionAction(packageId = pkg.id)),
+                            )
+                            mode = Mode.LIST
+                            render()
+                        },
+                    )
+                }
+            }
+            val footer = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            footer.addView(smallButton("返回") { showAddActionPicker() })
+            panel.addView(footer)
+        }
     }
 
     // ---------------- 新建步骤组（勾选已有步骤） ----------------
