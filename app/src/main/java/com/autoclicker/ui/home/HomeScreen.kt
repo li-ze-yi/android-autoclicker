@@ -1,6 +1,8 @@
 package com.autoclicker.ui.home
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,8 +55,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.autoclicker.core.flow.RecordFlow
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
+import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.Script
 import kotlinx.coroutines.launch
 
@@ -94,6 +98,54 @@ fun HomeScreen(
 
     val toast: (String) -> Unit = { msg ->
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    // 新建任务后自动弹悬浮球：待重试的 script、跳转次数与重试计数（设置页返回后重试，最多连续跳转 2 次）。
+    var pendingBallScript by remember { mutableStateOf<Script?>(null) }
+    var ballRedirectCount by remember { mutableStateOf(0) }
+    var ballRetryTick by remember { mutableStateOf(0) }
+
+    // 权限设置页返回：只自增计数，真正重试放在后面的 LaunchedEffect 中（避免前向引用局部函数）。
+    val ballPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        ballRetryTick++
+    }
+
+    val promptBallPermission: (PermissionChecker.Kind, Script) -> Unit = { kind, script ->
+        if (ballRedirectCount >= 2) {
+            toast("仍缺少「${PermissionChecker.kindLabel(kind)}」，请手动开启后再试")
+        } else {
+            ballRedirectCount++
+            pendingBallScript = script
+            toast("请先开启${PermissionChecker.kindLabel(kind)}，已为你打开设置页")
+            ballPermissionLauncher.launch(PermissionChecker.settingsIntent(context, kind))
+        }
+    }
+
+    val handleBallResult: (RecordFlow.StartResult, Script) -> Unit = { result, script ->
+        when (result) {
+            is RecordFlow.StartResult.NeedPermission -> promptBallPermission(result.kind, script)
+            is RecordFlow.StartResult.Started -> {
+                ballRedirectCount = 0
+                toast("已创建任务，悬浮球已弹出")
+                reload()
+                onOpenScript(script.id)
+            }
+            is RecordFlow.StartResult.Failed -> toast("创建失败：${result.message}")
+        }
+    }
+
+    LaunchedEffect(ballRetryTick) {
+        if (ballRetryTick == 0) return@LaunchedEffect
+        val script = pendingBallScript
+        pendingBallScript = null
+        if (script != null) {
+            handleBallResult(
+                RecordFlow.bindAndShowBall(ServiceLocator.context, script, requireAccessibility = false),
+                script,
+            )
+        }
     }
 
     Scaffold(
@@ -218,13 +270,18 @@ fun HomeScreen(
                 TextButton(
                     onClick = {
                         val name = createName.ifBlank { "未命名任务" }
+                        val script = Script(id = Ids.newId(), name = name)
+                        showCreate = false
+                        ballRedirectCount = 0
                         scope.launch {
-                            val script = Script(id = com.autoclicker.domain.model.Ids.newId(), name = name)
-                            runCatching { ServiceLocator.scripts.save(script) }
-                                .onFailure { toast("创建失败：${it.message}") }
-                            showCreate = false
-                            reload()
-                            onOpenScript(script.id)
+                            handleBallResult(
+                                RecordFlow.bindAndShowBall(
+                                    ServiceLocator.context,
+                                    script,
+                                    requireAccessibility = false,
+                                ),
+                                script,
+                            )
                         }
                     },
                 ) { Text("创建") }

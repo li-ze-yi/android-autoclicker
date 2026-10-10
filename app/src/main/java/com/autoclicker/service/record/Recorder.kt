@@ -17,7 +17,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
 import android.widget.Toast
 import com.autoclicker.core.bus.LogLevel
-import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
@@ -239,12 +238,12 @@ class Recorder(private val appContext: Context) {
             val previousId = lastStepId
             if (previousId != null) {
                 val gap = (now - lastEventTimeMs).coerceAtLeast(0L)
-                val previous = RecorderBus.steps.value.firstOrNull { it.id == previousId }
-                if (previous != null) RecorderBus.updateStep(previous.copy(delayAfterMs = gap))
+                val previous = RecordingSession.nodes.value.firstOrNull { it.id == previousId } as? StepNode
+                if (previous != null) RecordingSession.updateNode(previous.copy(delayAfterMs = gap))
             }
         }
         val step = StepNode(id = Ids.newId(), action = action)
-        RecorderBus.addStep(step)
+        RecordingSession.addNode(step)
         lastStepId = step.id
         lastEventTimeMs = now
     }
@@ -316,7 +315,7 @@ class Recorder(private val appContext: Context) {
                 MotionEvent.ACTION_UP -> {
                     val point = toPercent(event.rawX.toInt(), event.rawY.toInt())
                     val step = StepNode(id = Ids.newId(), action = ClickAction(point))
-                    RecorderBus.addStep(step)
+                    RecordingSession.addNode(step)
                     lastStepId = step.id
                     lastEventTimeMs = SystemClock.uptimeMillis()
                     RuntimeBus.log("取点：点击 (${fmt(point.x)}, ${fmt(point.y)})")

@@ -21,6 +21,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -46,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
@@ -59,6 +60,7 @@ import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.GestureAction
 import com.autoclicker.domain.model.GlobalKeyAction
+import com.autoclicker.domain.model.GroupNode
 import com.autoclicker.domain.model.InputTextAction
 import com.autoclicker.domain.model.JumpAction
 import com.autoclicker.domain.model.LongPressAction
@@ -74,13 +76,13 @@ import kotlinx.coroutines.launch
  * 录制页：一条龙流程的入口。
  *
  * 「建任务 → 检查/跳转权限 → 弹悬浮球 → 录制入库」由 [RecordFlow] 编排，
- * 本页负责触发、展示实时步骤（订阅 [RecorderBus.steps]）与编辑步参数；
+ * 本页负责触发、展示实时步骤（订阅 [RecordingSession.nodes]）与编辑步参数；
  * 点击「停止」即调用 [RecordFlow.finishAndClose] 停止录制并关闭悬浮球。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingScreen(onBack: () -> Unit) {
-    val steps by RecorderBus.steps.collectAsState()
+    val nodes by RecordingSession.nodes.collectAsState()
     val recording by RuntimeBus.recording.collectAsState()
     val boundScriptName by RecordingSession.scriptName.collectAsState()
     val scope = rememberCoroutineScope()
@@ -157,8 +159,12 @@ fun RecordingScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    if (steps.isNotEmpty()) {
-                        TextButton(onClick = { RecorderBus.clear() }) { Text("清空") }
+                    if (nodes.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                RecordingSession.nodes.value.forEach { RecordingSession.removeNode(it.id) }
+                            },
+                        ) { Text("清空") }
                     }
                 },
             )
@@ -212,7 +218,7 @@ fun RecordingScreen(onBack: () -> Unit) {
                 },
             )
             Text(
-                text = "已录制 ${steps.size} 步 · 录制期间可正常操作目标 App，步骤会自动保存到当前任务",
+                text = "任务共 ${nodes.size} 步 · 录制期间可正常操作目标 App，步骤会自动保存到当前任务",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
@@ -221,8 +227,11 @@ fun RecordingScreen(onBack: () -> Unit) {
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(steps, key = { _, step -> step.id }) { index, step ->
-                    StepEditorCard(index = index, step = step)
+                itemsIndexed(nodes, key = { _, node -> node.id }) { index, node ->
+                    when (node) {
+                        is StepNode -> StepEditorCard(index = index, step = node)
+                        is GroupNode -> GroupEditorCard(index = index, group = node)
+                    }
                 }
             }
         }
@@ -342,7 +351,7 @@ private fun StepEditorCard(index: Int, step: StepNode) {
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { RecorderBus.removeStep(step.id) }) {
+                IconButton(onClick = { RecordingSession.removeNode(step.id) }) {
                     Icon(Icons.Filled.Delete, contentDescription = "删除步骤")
                 }
             }
@@ -351,7 +360,7 @@ private fun StepEditorCard(index: Int, step: StepNode) {
                     value = step.delayAfterMs.toString(),
                     onValueChange = { text ->
                         val value = text.filter { it.isDigit() }.toLongOrNull() ?: 0L
-                        RecorderBus.updateStep(step.copy(delayAfterMs = value))
+                        RecordingSession.updateNode(step.copy(delayAfterMs = value))
                     },
                     label = { Text("延时(ms)") },
                     singleLine = true,
@@ -362,7 +371,7 @@ private fun StepEditorCard(index: Int, step: StepNode) {
                     value = step.repeatCount.toString(),
                     onValueChange = { text ->
                         val value = (text.filter { it.isDigit() }.toIntOrNull() ?: 1).coerceAtLeast(1)
-                        RecorderBus.updateStep(step.copy(repeatCount = value))
+                        RecordingSession.updateNode(step.copy(repeatCount = value))
                     },
                     label = { Text("重复") },
                     singleLine = true,
@@ -372,11 +381,38 @@ private fun StepEditorCard(index: Int, step: StepNode) {
             }
             OutlinedTextField(
                 value = step.note,
-                onValueChange = { RecorderBus.updateStep(step.copy(note = it)) },
+                onValueChange = { RecordingSession.updateNode(step.copy(note = it)) },
                 label = { Text("备注") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+@Composable
+private fun GroupEditorCard(index: Int, group: GroupNode) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("#${index + 1}", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "[组] ${group.name} ×${group.loopCount}",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { RecordingSession.moveNode(group.id, -1) }) {
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
+            }
+            IconButton(onClick = { RecordingSession.moveNode(group.id, 1) }) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
+            }
+            IconButton(onClick = { RecordingSession.removeNode(group.id) }) {
+                Icon(Icons.Filled.Delete, contentDescription = "删除步骤")
+            }
         }
     }
 }

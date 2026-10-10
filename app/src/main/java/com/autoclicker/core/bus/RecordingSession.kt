@@ -1,8 +1,8 @@
 package com.autoclicker.core.bus
 
 import com.autoclicker.di.ServiceLocator
-import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.Script
+import com.autoclicker.domain.model.ScriptNode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,11 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * 录制会话：把「录制」绑定到某个已存在的任务上。
+ * 任务编辑会话：绑定一个任务，并以 [nodes] 作为该任务顶层步骤的**唯一数据源**。
  *
- * 流程：先在首页/编辑器创建任务 → [begin] 绑定该任务 → 录制的新步骤写入 [RecorderBus]，
- * 并**自动追加保存**回该任务（基础节点在 [begin] 时快照，之后每次步骤变化都重算，
- * 因此重复保存不会产生重复步骤）。
+ * 悬浮球编辑器、App 内编辑器、录制器都通过本类读写步骤；任何修改都会自动保存回任务，
+ * 因此不会再出现「两套列表互相覆盖」的问题。
  */
 object RecordingSession {
 
@@ -27,57 +26,90 @@ object RecordingSession {
     private val _scriptName = MutableStateFlow<String?>(null)
     val scriptName: StateFlow<String?> = _scriptName.asStateFlow()
 
-    /** 会话开始时该任务已有的顶层节点（快照），新录步骤追加在其后。 */
-    private var baseNodes: List<ScriptNode> = emptyList()
+    private val _nodes = MutableStateFlow<List<ScriptNode>>(emptyList())
+    val nodes: StateFlow<List<ScriptNode>> = _nodes.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var saveJob: Job? = null
 
     val isActive: Boolean get() = _scriptId.value != null
 
-    /** 绑定任务并开始自动保存。会清空上一轮录制的临时步骤。 */
+    /** 绑定任务（载入其顶层节点）。 */
     fun begin(script: Script) {
         _scriptId.value = script.id
         _scriptName.value = script.name
-        baseNodes = script.nodes
-        RecorderBus.clear()
+        _nodes.value = script.nodes
         startAutoSave()
     }
 
-    /** 结束会话（不自动保存，调用方应先 [saveNow]）。 */
+    /** 结束会话。 */
     fun end() {
         _scriptId.value = null
         _scriptName.value = null
-        baseNodes = emptyList()
+        _nodes.value = emptyList()
         saveJob?.cancel()
         saveJob = null
     }
 
-    /** 立即把当前录制的步骤写入任务，返回是否成功。 */
+    // ---------------- 编辑操作（自动保存） ----------------
+
+    fun rename(name: String) {
+        _scriptName.value = name.trim().ifBlank { "录制任务" }
+        requestSave()
+    }
+
+    fun addNode(node: ScriptNode) {
+        _nodes.value = _nodes.value + node
+    }
+
+    fun addNodeAt(index: Int, node: ScriptNode) {
+        val list = _nodes.value.toMutableList()
+        list.add(index.coerceIn(0, list.size), node)
+        _nodes.value = list
+    }
+
+    fun updateNode(node: ScriptNode) {
+        _nodes.value = _nodes.value.map { if (it.id == node.id) node else it }
+    }
+
+    fun removeNode(id: String) {
+        _nodes.value = _nodes.value.filterNot { it.id == id }
+    }
+
+    /** 上/下移动步骤（delta = -1 上移，+1 下移）。 */
+    fun moveNode(id: String, delta: Int) {
+        val list = _nodes.value.toMutableList()
+        val from = list.indexOfFirst { it.id == id }
+        if (from < 0) return
+        val to = (from + delta).coerceIn(0, list.size - 1)
+        if (from == to) return
+        val item = list.removeAt(from)
+        list.add(to, item)
+        _nodes.value = list
+    }
+
+    // ---------------- 持久化 ----------------
+
+    /** 立即保存到任务。 */
     suspend fun saveNow(): Boolean {
         val id = _scriptId.value ?: return false
         val script = ServiceLocator.scripts.get(id) ?: return false
-        val recorded = RecorderBus.steps.value
-        val merged = baseNodes + recorded
-        if (script.nodes == merged) return true
-        ServiceLocator.scripts.save(script.copy(nodes = merged))
+        val name = _scriptName.value ?: script.name
+        val nodes = _nodes.value
+        if (script.name == name && script.nodes == nodes) return true
+        ServiceLocator.scripts.save(script.copy(name = name, nodes = nodes))
         return true
     }
 
-    /** 结束会话并保存。 */
-    suspend fun finish(): Boolean {
-        val ok = saveNow()
-        end()
-        return ok
+    private fun requestSave() {
+        scope.launch { runCatching { saveNow() } }
     }
 
     private fun startAutoSave() {
         saveJob?.cancel()
         saveJob = scope.launch {
-            RecorderBus.steps.collect {
-                if (_scriptId.value != null) {
-                    runCatching { saveNow() }
-                }
+            _nodes.collect {
+                if (_scriptId.value != null) runCatching { saveNow() }
             }
         }
     }

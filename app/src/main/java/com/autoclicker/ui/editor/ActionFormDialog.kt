@@ -88,44 +88,61 @@ fun ActionFormDialog(
         onDismissRequest = onDismiss,
         title = { Text(actionTitle(initial)) },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                when (val a = initial) {
-                    is ClickAction -> ClickForm(a) { built = it }
-                    is LongPressAction -> LongPressForm(a) { built = it }
-                    is RepeatClickAction -> RepeatClickForm(a) { built = it }
-                    is AreaRandomClickAction -> AreaRandomForm(a) { built = it }
-                    is ClickImageAction -> ClickImageForm(a, templates) { built = it }
-                    is ClickColorAction -> ClickColorForm(a) { built = it }
-                    is ClickTextAction -> ClickTextForm(a) { built = it }
-                    is ClickNodeAction -> ClickNodeForm(a) { built = it }
-                    is GestureAction -> GestureForm(a) { built = it }
-                    is SwipeAction -> SwipeForm(a) { built = it }
-                    is GlobalKeyAction -> GlobalKeyForm(a) { built = it }
-                    is OpenAppAction -> OpenAppForm(a) { built = it }
-                    is CloseAppAction -> CloseAppForm(a) { built = it }
-                    is InputTextAction -> InputTextForm(a, textGroups) { built = it }
-                    is ExtractContentAction -> ExtractContentForm(a, templates) { built = it }
-                    is VariableOpAction -> VariableOpForm(a) { built = it }
-                    is ConditionAction -> ConditionForm(a, templates) { built = it }
-                    is JumpAction -> JumpForm(a, steps) { built = it }
-                    is CallFunctionAction -> CallFunctionForm(a, packages) { built = it }
-                    is DelayAction -> DelayForm(a) { built = it }
-                    is EmptyAction -> EmptyForm(a) { built = it }
-                    is ToastAction -> ToastForm(a) { built = it }
-                    is PopupAction -> PopupForm(a) { built = it }
-                    is SpeakAction -> SpeakForm(a) { built = it }
-                    else -> Text("暂不支持编辑该动作")
-                }
-            }
+            ActionFormContent(initial, templates, packages, textGroups, steps) { built = it }
         },
         confirmButton = { TextButton(onClick = { onConfirm(built) }) { Text("确定") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+/**
+ * 动作参数内联表单：对话框与悬浮窗内嵌编辑器共用。
+ *
+ * 各字段以 [initial] 为初值，任何编辑都会通过 [onChanged] 回调当前构造中的动作。
+ */
+@Composable
+fun ActionFormContent(
+    initial: Action,
+    templates: List<ImageTemplate>,
+    packages: List<FunctionPackage>,
+    textGroups: List<TextGroup>,
+    steps: List<StepNode>,
+    onChanged: (Action) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 420.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        when (val a = initial) {
+            is ClickAction -> ClickForm(a, onChanged)
+            is LongPressAction -> LongPressForm(a, onChanged)
+            is RepeatClickAction -> RepeatClickForm(a, onChanged)
+            is AreaRandomClickAction -> AreaRandomForm(a, onChanged)
+            is ClickImageAction -> ClickImageForm(a, templates, onChanged)
+            is ClickColorAction -> ClickColorForm(a, onChanged)
+            is ClickTextAction -> ClickTextForm(a, onChanged)
+            is ClickNodeAction -> ClickNodeForm(a, onChanged)
+            is GestureAction -> GestureForm(a, onChanged)
+            is SwipeAction -> SwipeForm(a, onChanged)
+            is GlobalKeyAction -> GlobalKeyForm(a, onChanged)
+            is OpenAppAction -> OpenAppForm(a, onChanged)
+            is CloseAppAction -> CloseAppForm(a, onChanged)
+            is InputTextAction -> InputTextForm(a, textGroups, onChanged)
+            is ExtractContentAction -> ExtractContentForm(a, templates, onChanged)
+            is VariableOpAction -> VariableOpForm(a, onChanged)
+            is ConditionAction -> ConditionForm(a, templates, onChanged)
+            is JumpAction -> JumpForm(a, steps, onChanged)
+            is CallFunctionAction -> CallFunctionForm(a, packages, onChanged)
+            is DelayAction -> DelayForm(a, onChanged)
+            is EmptyAction -> EmptyForm(a, onChanged)
+            is ToastAction -> ToastForm(a, onChanged)
+            is PopupAction -> PopupForm(a, onChanged)
+            is SpeakAction -> SpeakForm(a, onChanged)
+            else -> Text("暂不支持编辑该动作")
+        }
+    }
 }
 
 // ---------------- 点击类 ----------------

@@ -1,5 +1,6 @@
 package com.autoclicker.service.overlay
 
+import android.app.AlertDialog
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -15,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -22,23 +24,20 @@ import android.widget.Toast
 import com.autoclicker.core.bus.LogEntry
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.PlaybackState
-import com.autoclicker.core.bus.RecorderBus
 import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RecordingState
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.di.ServiceLocator
-import com.autoclicker.domain.model.Action
-import com.autoclicker.domain.model.ClickAction
-import com.autoclicker.domain.model.GestureAction
-import com.autoclicker.domain.model.GlobalKeyAction
-import com.autoclicker.domain.model.InputTextAction
-import com.autoclicker.domain.model.LongPressAction
+import com.autoclicker.domain.model.GroupNode
+import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.Script
+import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.StepNode
-import com.autoclicker.domain.model.SwipeAction
 import com.autoclicker.service.capture.TemplateCaptureOverlay
 import com.autoclicker.service.record.Recorder
+import com.autoclicker.ui.editor.actionSummary
+import com.autoclicker.ui.overlay.OverlayTaskEditor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,7 +55,7 @@ import kotlin.math.roundToInt
  * 悬浮窗服务：可拖动悬浮球 + 运行控制台。
  *
  * 悬浮球：单击展开/收起控制台，长按快速开始/停止当前脚本；球体颜色与图标随运行/录制状态变化。
- * 控制台：脚本选择 + 开始/暂停/停止、录制控制与手动取点、录制步骤直接编辑、实时日志与当前步骤。
+ * 控制台：脚本选择 + 开始/暂停/停止、录制控制与手动取点、任务步骤直接编辑、实时日志与当前步骤。
  */
 class OverlayService : Service() {
 
@@ -409,13 +408,22 @@ class OverlayService : Service() {
         recordStateText = recordState
         root.addView(recordState)
 
+        val recordTaskRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val recordTask = TextView(this).apply {
             setTextColor(RECORD_COLOR)
             textSize = 12f
             text = recordTaskLabel()
         }
         recordTaskText = recordTask
-        root.addView(recordTask)
+        recordTaskRow.addView(
+            recordTask,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        recordTaskRow.addView(button("重命名") { promptRenameTask() })
+        root.addView(recordTaskRow)
 
         val recordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val record = button("录制") {
@@ -449,6 +457,11 @@ class OverlayService : Service() {
         })
         root.addView(saveRow)
 
+        val taskEditRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        taskEditRow.addView(button("动作编辑") { openTaskEditor() })
+        taskEditRow.addView(button("新建步骤组") { promptNewGroup() })
+        root.addView(taskEditRow)
+
         // 截图建模板（悬浮窗内直接唤起截图裁剪层）
         val templateRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         templateRow.addView(button("截图建模板") {
@@ -459,9 +472,9 @@ class OverlayService : Service() {
         })
         root.addView(templateRow)
 
-        // 已录制步骤（可直接修改）
+        // 任务步骤（可直接修改）
         root.addView(TextView(this).apply {
-            text = "已录制步骤（可直接修改）"
+            text = "任务步骤（可直接修改）"
             setTextColor(STEP_COLOR)
             textSize = 12f
         })
@@ -648,26 +661,31 @@ class OverlayService : Service() {
             }
         }
         recorderStepsJob = scope.launch {
-            RecorderBus.steps.collect { rebuildSteps() }
+            RecordingSession.nodes.collect { rebuildSteps() }
         }
         recordTaskJob = scope.launch {
             RecordingSession.scriptName.collect { recordTaskText?.text = recordTaskLabel() }
         }
     }
 
-    // ---------------- 步骤列表（可直接修改） ----------------
+    // ---------------- 任务步骤（可直接修改） ----------------
 
     private fun rebuildSteps() {
         val container = stepsContainer ?: return
         container.removeAllViews()
-        val steps = RecorderBus.steps.value
-        if (steps.isEmpty()) {
-            container.addView(smallText("（暂无录制步骤）"))
+        val nodes = RecordingSession.nodes.value
+        if (nodes.isEmpty()) {
+            container.addView(smallText("（暂无任务步骤，点击「动作编辑」添加）"))
             return
         }
-        steps.forEachIndexed { index, step ->
-            container.addView(stepRow(index, step))
+        nodes.forEachIndexed { index, node ->
+            container.addView(nodeRow(index, node))
         }
+    }
+
+    private fun nodeRow(index: Int, node: ScriptNode): View = when (node) {
+        is StepNode -> stepRow(index, node)
+        is GroupNode -> groupRow(index, node)
     }
 
     private fun stepRow(index: Int, step: StepNode): View {
@@ -676,42 +694,106 @@ class OverlayService : Service() {
             setPadding(0, dp(4), 0, dp(4))
         }
         row.addView(TextView(this).apply {
-            text = "#${index + 1} ${summarize(step.action)}"
+            text = "#${index + 1} ${actionSummary(step.action)}"
             setTextColor(Color.WHITE)
             textSize = 11f
         })
         val editRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         editRow.addView(button("延时-") { adjustDelay(step, -DELAY_STEP_MS) })
-        editRow.addView(TextView(this).apply {
-            text = "${step.delayAfterMs}ms"
-            setTextColor(Color.parseColor("#BBBBBB"))
-            textSize = 11f
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), 0)
-        })
+        editRow.addView(valueText("${step.delayAfterMs}ms"))
         editRow.addView(button("延时+") { adjustDelay(step, DELAY_STEP_MS) })
         editRow.addView(button("次数-") { adjustRepeat(step, -1) })
-        editRow.addView(TextView(this).apply {
-            text = "×${step.repeatCount}"
-            setTextColor(Color.parseColor("#BBBBBB"))
-            textSize = 11f
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), 0)
-        })
+        editRow.addView(valueText("×${step.repeatCount}"))
         editRow.addView(button("次数+") { adjustRepeat(step, 1) })
-        editRow.addView(button("删除") { RecorderBus.removeStep(step.id) })
+        editRow.addView(button("删除") { RecordingSession.removeNode(step.id) })
+        editRow.addView(button("上移") { RecordingSession.moveNode(step.id, -1) })
+        editRow.addView(button("下移") { RecordingSession.moveNode(step.id, 1) })
+        row.addView(editRow)
+        return row
+    }
+
+    private fun groupRow(index: Int, group: GroupNode): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        row.addView(TextView(this).apply {
+            text = "#${index + 1} [组] ${group.name} ×${group.loopCount}"
+            setTextColor(GROUP_COLOR)
+            textSize = 11f
+        })
+        val editRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        editRow.addView(button("循环-") { adjustLoop(group, -1) })
+        editRow.addView(valueText("×${group.loopCount}"))
+        editRow.addView(button("循环+") { adjustLoop(group, 1) })
+        editRow.addView(button("删除") { RecordingSession.removeNode(group.id) })
+        editRow.addView(button("上移") { RecordingSession.moveNode(group.id, -1) })
+        editRow.addView(button("下移") { RecordingSession.moveNode(group.id, 1) })
         row.addView(editRow)
         return row
     }
 
     private fun adjustDelay(step: StepNode, delta: Long) {
         val value = (step.delayAfterMs + delta).coerceAtLeast(0L)
-        RecorderBus.updateStep(step.copy(delayAfterMs = value))
+        RecordingSession.updateNode(step.copy(delayAfterMs = value))
     }
 
     private fun adjustRepeat(step: StepNode, delta: Int) {
         val value = (step.repeatCount + delta).coerceAtLeast(1)
-        RecorderBus.updateStep(step.copy(repeatCount = value))
+        RecordingSession.updateNode(step.copy(repeatCount = value))
+    }
+
+    private fun adjustLoop(group: GroupNode, delta: Int) {
+        val value = (group.loopCount + delta).coerceAtLeast(1)
+        RecordingSession.updateNode(group.copy(loopCount = value))
+    }
+
+    // ---------------- 任务编辑入口 ----------------
+
+    private fun promptRenameTask() {
+        if (!RecordingSession.isActive) {
+            Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val input = EditText(this).apply {
+            setText(RecordingSession.scriptName.value ?: "")
+            setHint("任务名称")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名任务")
+            .setView(input)
+            .setPositiveButton("确定") { _, _ ->
+                RecordingSession.rename(input.text.toString())
+                RuntimeBus.log("控制台：任务已重命名为「${RecordingSession.scriptName.value ?: ""}」")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun openTaskEditor() {
+        if (!RecordingSession.isActive) {
+            Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
+            return
+        }
+        OverlayTaskEditor.open(this)
+    }
+
+    private fun promptNewGroup() {
+        if (!RecordingSession.isActive) {
+            Toast.makeText(this, "请先创建或打开一个任务", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val input = EditText(this).apply { setHint("步骤组名称") }
+        AlertDialog.Builder(this)
+            .setTitle("新建步骤组")
+            .setView(input)
+            .setPositiveButton("确定") { _, _ ->
+                val name = input.text.toString().trim().ifBlank { "步骤组" }
+                RecordingSession.addNode(GroupNode(Ids.newId(), name, emptyList(), 1))
+                RuntimeBus.log("控制台：已新建步骤组「$name」")
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun renderLogs(logs: List<LogEntry>) {
@@ -747,6 +829,14 @@ class OverlayService : Service() {
         textSize = 11f
     }
 
+    private fun valueText(value: String): TextView = TextView(this).apply {
+        text = value
+        setTextColor(Color.parseColor("#BBBBBB"))
+        textSize = 11f
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(4), 0, dp(4), 0)
+    }
+
     private fun stateLabel(state: PlaybackState): String = when (state) {
         PlaybackState.IDLE -> "空闲"
         PlaybackState.RUNNING -> "运行中"
@@ -764,18 +854,6 @@ class OverlayService : Service() {
     private fun recordTaskLabel(): String =
         "录制任务：${RecordingSession.scriptName.value ?: "未绑定（请先在首页新建任务）"}"
 
-    private fun summarize(action: Action): String = when (action) {
-        is ClickAction -> "点击 (${fmt(action.point.x)}, ${fmt(action.point.y)})"
-        is LongPressAction -> "长按 (${fmt(action.point.x)}, ${fmt(action.point.y)})"
-        is SwipeAction -> "滑动"
-        is GestureAction -> "手势"
-        is GlobalKeyAction -> "全局键 ${action.key}"
-        is InputTextAction -> "输入文字"
-        else -> action::class.simpleName ?: "动作"
-    }
-
-    private fun fmt(value: Float): String = (value * 1000f).roundToInt().let { "${it / 10f}%" }
-
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
     companion object {
@@ -787,6 +865,7 @@ class OverlayService : Service() {
         private val CONSOLE_BG = 0xF0000000.toInt()
         private val STATE_COLOR = 0xFF8BC34A.toInt()
         private val STEP_COLOR = 0xFFFFC107.toInt()
+        private val GROUP_COLOR = 0xFF4FC3F7.toInt()
         private val RECORD_COLOR = 0xFFFF8A80.toInt()
 
         private const val BALL_SIZE_DP = 52
