@@ -8,10 +8,14 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import com.autoclicker.MyApplication
+import com.autoclicker.core.bus.EngineState
+import com.autoclicker.core.bus.RecordMode
+import com.autoclicker.service.record.PreciseCaptureLayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 
@@ -40,6 +44,12 @@ class OverlayService : Service() {
 
     /** 当前模式：single / multi */
     private var mode: String = MODE_MULTI
+
+    /** 精确录制全屏触摸捕获层（仅 Recording+Precise 时存在） */
+    private var captureLayer: PreciseCaptureLayer? = null
+
+    /** 录制开始前目标控件的隐藏状态，结束录制后原样恢复 */
+    private var hiddenBeforeRecording: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -90,6 +100,45 @@ class OverlayService : Service() {
         // 隐藏状态 → 小眼睛图标同步
         scope.launch {
             app.targetController.hidden.collect { hidden -> panel.setHiddenState(hidden) }
+        }
+
+        // 引擎状态 + 录制模式 → 挂载/卸载精确录制触摸捕获层
+        scope.launch {
+            combine(app.bus.engineState, app.recorder.mode) { state, recordMode ->
+                state to recordMode
+            }.collect { (state, recordMode) ->
+                syncCaptureLayer(state, recordMode)
+            }
+        }
+    }
+
+    /**
+     * 按引擎状态与录制模式同步精确捕获层：
+     * - Recording + Precise：记录原隐藏状态、强制隐藏目标控件，挂载全屏捕获层；
+     *   随后把悬浮球/面板重新置顶 —— 球窗口在捕获层之上，其触摸不经过捕获层，天然不会被录制；
+     * - 离开录制（回 Idle）：卸载捕获层，按录制前原值恢复目标控件显隐；
+     * - Recording + Normal：不挂捕获层（普通模式由无障碍事件源录入）。
+     */
+    private fun syncCaptureLayer(state: EngineState, recordMode: RecordMode) {
+        if (state == EngineState.Recording && recordMode == RecordMode.Precise) {
+            if (captureLayer != null) return
+
+            hiddenBeforeRecording = app.targetController.hidden.value
+            // 强制隐藏目标控件（TargetOverlayManager 观察 hidden 自动移除目标窗口与连线）
+            app.targetController.setHidden(true)
+
+            val layer = PreciseCaptureLayer(this, wm, app.recorder, scope)
+            layer.attach()
+            captureLayer = layer
+
+            // 捕获层是后加的窗口，默认在最顶；需把球/面板重挂到它之上，保证录制启停点击不被拦截
+            reorderChrome()
+        } else {
+            val layer = captureLayer ?: return
+            layer.detach()
+            captureLayer = null
+            // 恢复录制前的显隐原值（原本就隐藏则保持隐藏）
+            app.targetController.setHidden(hiddenBeforeRecording)
         }
     }
 
@@ -200,6 +249,8 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         collapsePanel()
+        captureLayer?.detach()
+        captureLayer = null
         manager.shutdown()
         ball.detach()
         scope.cancel()

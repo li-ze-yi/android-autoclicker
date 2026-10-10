@@ -50,16 +50,19 @@ fun HomeScreen(
     val context = LocalContext.current
     val app = context.applicationContext as MyApplication
     val viewModel: HomeViewModel = viewModel(
-        factory = androidx.lifecycle.viewmodel.initializer {
-            HomeViewModel(app)
-        },
+        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return HomeViewModel(app) as T
+            }
+        }
     )
     val state by viewModel.state.collectAsState()
 
     // 从系统设置返回时重新检测权限
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.Event.ON_RESUME) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             viewModel.onIntent(HomeIntent.Refresh)
         }
     }

@@ -98,6 +98,21 @@ class AutomationCoordinator(private val app: MyApplication) {
         scope.launch { runCatching { app.bus.stop() } }
     }
 
+    /**
+     * 开始录制：初始化录制会话并迁移总线到 Recording。
+     * @param mode 普通（无障碍事件）/ 精确（全屏触摸捕获）
+     */
+    fun beginRecording(mode: com.autoclicker.core.bus.RecordMode) {
+        app.recorder.begin(mode)
+        scope.launch { runCatching { app.bus.startRecording(mode) } }
+    }
+
+    /** 结束录制：总线回空闲，已录步骤保留（供保存/回放） */
+    fun stopRecording() {
+        app.recorder.end()
+        scope.launch { runCatching { app.bus.stopRecording() } }
+    }
+
     private companion object {
         /** 目标直配模式使用的虚拟脚本 ID */
         const val LIVE_SCRIPT_ID = "__live_targets__"

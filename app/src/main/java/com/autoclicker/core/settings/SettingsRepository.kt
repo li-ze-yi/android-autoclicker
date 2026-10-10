@@ -19,7 +19,8 @@ import kotlinx.coroutines.flow.map
  * 实际落盘文件为 filesDir/datastore/autoclicker_settings.preferences_pb。
  */
 private val Context.autoclickerDataStore: DataStore<Preferences> by preferencesDataStore(
-    name = DATASTORE_NAME
+    // 实际落盘文件为 filesDir/datastore/autoclicker_settings.preferences_pb
+    name = "autoclicker_settings"
 )
 
 /**
@@ -74,9 +75,6 @@ class SettingsRepository(context: Context) {
         runCatching { RecordMode.valueOf(this) }.getOrDefault(RecordMode.Normal)
 
     private companion object {
-        /** DataStore 名称（实际文件自动追加 .preferences_pb 后缀） */
-        const val DATASTORE_NAME = "autoclicker_settings"
-
         /** 录制模式键（值：Normal / Precise） */
         val RECORD_MODE_KEY = stringPreferencesKey("record_mode")
 

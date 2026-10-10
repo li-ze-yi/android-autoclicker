@@ -4,6 +4,7 @@ import android.app.Application
 import com.autoclicker.core.automation.AppOverlayController
 import com.autoclicker.core.automation.AutomationCoordinator
 import com.autoclicker.core.bus.AutomationBus
+import com.autoclicker.core.record.Recorder
 import com.autoclicker.core.targets.TargetController
 
 /**
@@ -19,6 +20,9 @@ class MyApplication : Application() {
 
     /** 多目标配置控制器（进程内唯一） */
     val targetController: TargetController by lazy { TargetController() }
+
+    /** 动作录制器（进程内唯一） */
+    val recorder: Recorder by lazy { Recorder() }
 
     /** 自动化总协调器（进程内唯一） */
     val coordinator: AutomationCoordinator by lazy { AutomationCoordinator(this) }
