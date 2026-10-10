@@ -2,18 +2,16 @@ package com.autoclicker.domain.codec
 
 import kotlinx.serialization.json.Json
 
-/**
- * 领域层统一使用的 JSON 配置（脚本与函数包共用，保证导入导出格式一致）：
- *
- * - ignoreUnknownKeys = false：严格模式，出现未知字段直接判为损坏数据，
- *   避免静默吞掉拼错/多写的字段；
- * - encodeDefaults = true：默认值也写入 JSON，导出文件字段完整、可读、跨实现稳定；
- * - 其余保持默认（如显式输出 null、多态 discriminator 为 "type"）。
- */
-internal val domainJson: Json = Json {
-    ignoreUnknownKeys = false
-    encodeDefaults = true
+/** 统一的 JSON 编解码配置：宽容未知字段、保留默认值、多态判别名固定为 kind。 */
+object DomainJson {
+    val instance: Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        isLenient = true
+        prettyPrint = true
+        classDiscriminator = "kind"
+    }
 }
 
-/** 当前数据格式版本（V2 重构后的脚本格式，对应 FR-6） */
-internal const val SCHEMA_VERSION: Int = 2
+/** 脚本/函数包数据读写异常。 */
+class ScriptDataException(message: String, cause: Throwable? = null) : Exception(message, cause)

@@ -7,28 +7,22 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-/** 品牌主色（与悬浮控件一致） */
-private val Primary = Color(0xFF2962FF)
-private val PrimaryDark = Color(0xFF82B1FF)
-private val Error = Color(0xFFE53935)
+private val Blue = Color(0xFF2F6BFF)
+private val BlueDark = Color(0xFF9DBBFF)
+private val Green = Color(0xFF12B76A)
 
 private val LightColors = lightColorScheme(
-    primary = Primary,
-    onPrimary = Color.White,
-    secondary = Color(0xFF448AFF),
-    error = Error,
+    primary = Blue,
+    secondary = Color(0xFF4A5568),
+    tertiary = Green,
 )
 
 private val DarkColors = darkColorScheme(
-    primary = PrimaryDark,
-    onPrimary = Color(0xFF002171),
-    secondary = Color(0xFF82B1FF),
-    error = Color(0xFFEF9A9A),
+    primary = BlueDark,
+    secondary = Color(0xFFA0AEC0),
+    tertiary = Green,
 )
 
-/**
- * 应用统一主题：品牌蓝配色，跟随系统深色模式。
- */
 @Composable
 fun AppTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),

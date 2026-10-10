@@ -1,25 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- 悬浮窗：悬浮球 / 控制面板 / 目标控件 / 精确录制触摸层 -->
+    <!-- 悬浮窗：悬浮球 / 运行控制台 / 录制触摸层 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- 前台服务（运行/录制状态保持） -->
+    <!-- 前台服务：播放/录制状态保持 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
-    <!-- 通知：运行状态、定时触发 -->
+    <!-- 通知与振动 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- 定时触发：开机重注册与精确闹钟 -->
+    <!-- 网络：HTTP 请求动作 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- 查询已安装应用：打开/关闭 App 动作 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- 保活：忽略电池优化、开机自启 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
         android:name=".MyApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_launcher"
@@ -30,17 +39,19 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.AutoClicker">
+            android:theme="@style/Theme.AutoClicker"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- 唯一无障碍服务：手势派发 + 普通录制事件来源 -->
+        <!-- 无障碍服务：手势派发、节点查询、录制事件来源 -->
         <service
             android:name=".service.accessibility.AutomationAccessibilityService"
             android:exported="false"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -50,38 +61,26 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- 悬浮窗服务：悬浮球 / 控制面板 / 目标控件（精确录制触摸层 Task 8） -->
+        <!-- 悬浮窗服务：悬浮球 + 运行控制台 + 实时日志 -->
         <service
             android:name=".service.overlay.OverlayService"
             android:exported="false" />
 
-        <!-- 屏幕采集服务：MediaProjection 单次会话（FR-7，Android 14+ 必须声明 mediaProjection 类型） -->
+        <!-- 屏幕采集服务：MediaProjection 会话，供找图/找色/OCR 使用 -->
         <service
             android:name=".service.capture.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- 持续投屏服务：一次授权持续出帧，供 WaitImage 识图等待轮询（Task 11） -->
+        <!-- 播放前台服务：脚本播放期间保活 + 通知 -->
         <service
-            android:name=".service.capture.ContinuousCaptureService"
+            android:name=".service.runtime.PlaybackForegroundService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!-- 定时闹钟到点接收器：发高重要性触发通知（Task 13 / FR-9）。
-             仅由本 App 的 AlarmManager 以显式 Intent 唤起，不导出 -->
-        <receiver
-            android:name=".service.trigger.TriggerReceiver"
-            android:exported="false" />
-
-        <!-- 开机完成接收器：重启后重新注册未过期闹钟、清理过期单次任务（Task 13 / FR-9） -->
-        <receiver
-            android:name=".service.trigger.BootCompletedReceiver"
-            android:exported="true"
-            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="automation_script_playback" />
+        </service>
     </application>
 
 </manifest>

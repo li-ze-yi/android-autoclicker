@@ -3,16 +3,20 @@ package com.autoclicker.domain.model
 import kotlinx.serialization.Serializable
 
 /**
- * 全局函数包（FR-6B）：一组可复用的步骤（可含循环段、可调用其他函数包），
- * 独立于脚本存储；脚本通过 [ScriptStep.PackageCall] 仅以 ID 引用。
- *
- * @property id 函数包稳定 ID，被引用方只存此 ID
- * @property name 函数包名称
- * @property steps 函数包步骤树
+ * 独立函数包：一段可复用的动作流程，可被任意脚本通过 CallFunctionAction 按 id 调用，
+ * 支持入参（params）与返回值（returns）。
  */
 @Serializable
 data class FunctionPackage(
     val id: String,
     val name: String,
-    val steps: List<ScriptStep> = emptyList(),
-)
+    val description: String = "",
+    val schemaVersion: Int = Script.CURRENT_SCHEMA,
+    val params: List<ParamDef> = emptyList(),
+    val returns: List<ReturnDef> = emptyList(),
+    val nodes: List<ScriptNode> = emptyList(),
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+) {
+    val actionCount: Int get() = nodes.flattenSteps().size
+}
