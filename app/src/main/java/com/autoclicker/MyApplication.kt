@@ -28,5 +28,7 @@ class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 初始化通知渠道（运行状态 / 定时触发）
+        com.autoclicker.core.notify.NotificationChannels.ensure(this)
     }
 }
