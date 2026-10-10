@@ -129,7 +129,7 @@ class OverlayService : Service() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             textSize = 18f
-            background = oval(BALL_COLOR, strokeWidthDp = 2)
+            background = oval(ballColor(), strokeWidthDp = 2)
             text = ballIcon()
         }
         val params = WindowManager.LayoutParams(
