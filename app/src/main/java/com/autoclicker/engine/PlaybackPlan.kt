@@ -70,12 +70,13 @@ class PlaybackPlan private constructor(
             val start = out.size
             stepIndex[step.id] = start
             out.add(DoStep(step.id, step))
-            if (step.repeatCount > 1) {
-                // 跳回本步骤的 DoStep，重复执行 repeatCount 次。
-                out.add(LoopIns(step.id, step.repeatCount, start))
-            }
             if (step.delayAfterMs > 0) {
+                // 延时要落在「重复执行」内部：连点时每点一次都等一会儿，屏幕才有时间刷新。
                 out.add(DelayIns(step.id, step.delayAfterMs, 0L))
+            }
+            if (step.repeatCount > 1) {
+                // 跳回本步骤的 DoStep，重复执行 repeatCount 次（含每次的动作后延时）。
+                out.add(LoopIns(step.id, step.repeatCount, start))
             }
             if (step.onSuccessStepId != null || step.onFailureStepId != null) {
                 // 分支在重复执行结束之后生效。

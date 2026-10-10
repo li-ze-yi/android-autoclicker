@@ -1,5 +1,7 @@
 package com.autoclicker.engine
 
+import com.autoclicker.core.bus.LogLevel
+import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.domain.model.StepNode
 import kotlin.random.Random
 
@@ -46,6 +48,7 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
     ) {
         val counters = HashMap<Int, Int>()
         val outcomes = HashMap<String, StepOutcome>()
+        val notifiedBranches = HashSet<String>()
         val total = plan.stepIndex.size
         var pc = 0
         var guard = 0
@@ -87,7 +90,13 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                         false -> ins.failureTargetStepId
                         null -> null
                     }
-                    pc = target?.let { plan.stepIndex[it] } ?: (pc + 1)
+                    val jumped = target?.let { plan.stepIndex[it] }
+                    if (target != null && jumped == null) {
+                        // 目标步骤被删掉了：不再静默跳过，明确提示，否则用户会以为「跳转不可用」。
+                        RuntimeBus.log(LogLevel.WARN, "跳转目标步骤已不存在，改为继续下一步：$target")
+                    }
+                    logBranchOnce(ins.stepId, outcome?.success, target, notifiedBranches)
+                    pc = jumped ?: (pc + 1)
                 }
 
                 is JumpIns -> pc = plan.stepIndex[ins.targetStepId] ?: (pc + 1)
@@ -98,5 +107,22 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
     companion object {
         /** 单次运行允许的最大指令数，作为死循环兜底。 */
         const val MAX_ITERATIONS = 5_000_000
+    }
+
+    /** 每条分支判定在本次运行里只记一次日志，避免自跳转重试循环刷屏。 */
+    private fun logBranchOnce(
+        stepId: String,
+        success: Boolean?,
+        target: String?,
+        notified: MutableSet<String>,
+    ) {
+        if (!notified.add("$stepId|$success|$target")) return
+        val result = when (success) {
+            true -> "成功"
+            false -> "失败"
+            null -> "无结果"
+        }
+        val action = target?.let { "跳转到步骤 ${it.take(6)}" } ?: "继续下一步"
+        RuntimeBus.log("分支判定：$result → $action")
     }
 }

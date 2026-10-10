@@ -567,10 +567,12 @@ class ActionExecutor(
         val total = count.coerceAtLeast(1)
         var i = 0
         while (i < total) {
+            // 首次识别前先缓冲一下：上一步的点击/滑动生效后屏幕需要时间刷新，
+            // 立即截屏会拿到旧帧，表现为「明明在可识别区域却识别不上」。
+            gate.delay(if (i == 0) SETTLE_BEFORE_DETECT_MS else intervalMs.coerceAtLeast(0))
             val result = block()
             if (result != null) return result
             i++
-            if (i < total) gate.delay(intervalMs.coerceAtLeast(0))
         }
         return null
     }
@@ -584,4 +586,9 @@ class ActionExecutor(
     }
 
     private fun randomExtra(range: Long): Long = if (range <= 0) 0L else Random.nextLong(0, range + 1)
+
+    companion object {
+        /** 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。 */
+        private const val SETTLE_BEFORE_DETECT_MS = 300L
+    }
 }
