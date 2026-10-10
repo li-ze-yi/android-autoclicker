@@ -47,6 +47,7 @@ import androidx.compose.material3.MaterialTheme.colorScheme
 fun HomeScreen(
     onNavigateToPermissions: () -> Unit,
     onNavigateToRecording: () -> Unit,
+    onNavigateToTriggers: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -155,6 +156,12 @@ fun HomeScreen(
                 onNavigateToRecording()
             },
         )
+
+        // 定时任务入口
+        OutlinedButton(
+            onClick = onNavigateToTriggers,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("定时任务") }
     }
 }
 

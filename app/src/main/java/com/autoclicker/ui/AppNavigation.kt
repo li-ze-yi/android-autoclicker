@@ -74,6 +74,11 @@ fun AppNavigation() {
                             launchSingleTop = true
                         }
                     },
+                    onNavigateToTriggers = {
+                        navController.navigate(Routes.TRIGGERS) {
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
             composable(Routes.SCRIPTS) {
@@ -115,6 +120,10 @@ fun AppNavigation() {
 
             composable(Routes.VISION_TEMPLATES) {
                 com.autoclicker.ui.templates.TemplatesScreen()
+            }
+
+            composable(Routes.TRIGGERS) {
+                com.autoclicker.ui.trigger.TriggerScreen()
             }
         }
     }

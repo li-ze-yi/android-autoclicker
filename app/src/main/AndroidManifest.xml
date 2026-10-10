@@ -66,6 +66,22 @@
             android:name=".service.capture.ContinuousCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 定时闹钟到点接收器：发高重要性触发通知（Task 13 / FR-9）。
+             仅由本 App 的 AlarmManager 以显式 Intent 唤起，不导出 -->
+        <receiver
+            android:name=".service.trigger.TriggerReceiver"
+            android:exported="false" />
+
+        <!-- 开机完成接收器：重启后重新注册未过期闹钟、清理过期单次任务（Task 13 / FR-9） -->
+        <receiver
+            android:name=".service.trigger.BootCompletedReceiver"
+            android:exported="true"
+            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

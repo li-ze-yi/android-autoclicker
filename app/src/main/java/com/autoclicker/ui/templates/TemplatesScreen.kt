@@ -60,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
@@ -455,7 +456,7 @@ private fun TemplateCard(
                         // 注意：androidx.compose.foundation.Image 与 material 图标 Image
                         // 同名，故此处用全限定名，避免 import 冲突
                         androidx.compose.foundation.Image(
-                            bitmap = androidx.compose.ui.graphics.asImageBitmap(thumbnail),
+                            bitmap = thumbnail.asImageBitmap(),
                             contentDescription = "模板预览",
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -588,7 +589,7 @@ data class TemplatesUiState(
     val loading: Boolean = true,
     val templates: List<ImageTemplateMetadata> = emptyList(),
     /** 模板缩略图：id → 位图（VM 统一管理回收） */
-    val thumbnails: Map<String, Bitmap> = emptyList(),
+    val thumbnails: Map<String, Bitmap> = emptyMap(),
     /** 当前展开操作区的模板 ID */
     val expandedId: String? = null,
     /** 持续投屏会话是否活动 */
