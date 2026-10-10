@@ -69,7 +69,6 @@ class AccessibilityScreenSource private constructor() : ScreenSource {
                         }
                     },
                 )
-                if (!accepted && cont.isActive) cont.resume(null)
             } catch (t: Throwable) {
                 if (cont.isActive) cont.resume(null)
             }

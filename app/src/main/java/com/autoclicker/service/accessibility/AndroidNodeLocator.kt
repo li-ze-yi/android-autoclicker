@@ -21,12 +21,12 @@ class AndroidNodeLocator(
     override suspend fun findNodes(selector: NodeSelector): List<NodeInfo> {
         val matched = collectNodes { matches(it, selector) }
         val withBounds = matched.map { it to boundsOf(it) }
-        withBounds.sortWith(
+        val ordered = withBounds.sortedWith(
             compareByDescending<Pair<AccessibilityNodeInfo, Rect>> { it.first.isClickable }
                 .thenBy { it.second.width() * it.second.height() }
                 .thenBy { it.second.top },
         )
-        return withBounds.map { toInfo(it.first, it.second) }
+        return ordered.map { toInfo(it.first, it.second) }
     }
 
     override suspend fun readAllText(): List<NodeInfo> {
@@ -58,7 +58,7 @@ class AndroidNodeLocator(
 
         val contentDesc = selector.contentDesc
         if (!contentDesc.isNullOrEmpty()) {
-            val nodeDesc = node.contentDesc?.toString() ?: return false
+            val nodeDesc = node.contentDescription?.toString() ?: return false
             if (!nodeDesc.contains(contentDesc, ignoreCase = true)) return false
         }
 
@@ -105,7 +105,7 @@ class AndroidNodeLocator(
         text = node.text?.toString(),
         viewId = node.viewIdResourceName,
         className = node.className?.toString(),
-        contentDesc = node.contentDesc?.toString(),
+        contentDesc = node.contentDescription?.toString(),
         bounds = PixelRect(rect.left, rect.top, rect.right, rect.bottom),
         clickable = node.isClickable,
     )
