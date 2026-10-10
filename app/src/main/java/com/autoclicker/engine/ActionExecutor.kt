@@ -73,6 +73,11 @@ class ActionExecutor(
     private val numberCursor = HashMap<String, Long>()
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+
+    /** 上一次图片识别点击的落点与「连续点同一处」次数，用于诊断原地死循环。 */
+    private var lastImageClickPoint: PixelPoint? = null
+    private var samePlaceRepeats = 0
+
     @Volatile
     private var lastScreen: Pair<Int, Int>? = null
 
@@ -251,7 +256,7 @@ class ActionExecutor(
 
     private suspend fun clickImage(action: ClickImageAction): StepOutcome {
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val frame = captureFrame() ?: return@retryDetect null
+            val frame = captureFrameWithRetry() ?: return@retryDetect null
             val finder = Platform.images() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             val region = action.region?.let { frameMapper.toPixel(it) }
@@ -262,12 +267,28 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().jitter(hit, action.randomOffset)
+        // 记录连续点击同一坐标的情况：命中固定不动的元素或截屏未刷新时，
+        // 「成功→跳回本步骤」会一直原地循环，用户看到的就是「卡住不动也不滑动」。
+        val samePlace = point == lastImageClickPoint
+        samePlaceRepeats = if (samePlace) samePlaceRepeats + 1 else 0
+        lastImageClickPoint = point
+        RuntimeBus.log(
+            "识别到模板「${templateName(action.templateId)}」，点击 (${point.x}, ${point.y})" +
+                if (samePlaceRepeats >= 2) "（连续第 ${samePlaceRepeats + 1} 次点同一处）" else "",
+        )
+        if (samePlaceRepeats == WARN_SAME_POINT_TIMES) {
+            RuntimeBus.log(
+                LogLevel.WARN,
+                "已连续 $WARN_SAME_POINT_TIMES 次点击同一坐标 (${point.x}, ${point.y})："
+                    + "目标可能点击后未消失，或截屏画面未刷新；若一直不滑动请看这里",
+            )
+        }
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
     private suspend fun clickColor(action: ClickColorAction): StepOutcome {
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val frame = captureFrame() ?: return@retryDetect null
+            val frame = captureFrameWithRetry() ?: return@retryDetect null
             val finder = Platform.colors() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             finder.find(action.color, action.tolerance, frameMapper.toPixel(action.region), frame)
@@ -524,6 +545,26 @@ class ActionExecutor(
         return dm.widthPixels to dm.heightPixels
     }
 
+    /**
+     * 带退避重试的截屏。
+     *
+     * 无障碍截屏会被系统按调用间隔节流，一次失败就直接判定「没识别到」会误触发失败跳转；
+     * 这里在采集能力可用时最多重试几次，间隔 [CAPTURE_RETRY_GAP_MS]。
+     */
+    private suspend fun captureFrameWithRetry(): ScreenFrame? {
+        val attempts = if (Platform.screen()?.isReady() == true) CAPTURE_RETRY_TIMES else 1
+        var i = 0
+        while (i < attempts) {
+            captureFrame()?.let { return it }
+            i++
+            if (i < attempts) gate.delay(CAPTURE_RETRY_GAP_MS)
+        }
+        if (attempts > 1) {
+            RuntimeBus.log(LogLevel.ERROR, "连续 $attempts 次截屏失败，本步骤无法识别")
+        }
+        return null
+    }
+
     private suspend fun captureFrame(): ScreenFrame? {
         val source = Platform.screen()
         if (source == null) {
@@ -590,5 +631,12 @@ class ActionExecutor(
     companion object {
         /** 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。 */
         private const val SETTLE_BEFORE_DETECT_MS = 300L
+
+        /** 截屏失败时的退避重试次数与间隔。 */
+        private const val CAPTURE_RETRY_TIMES = 3
+        private const val CAPTURE_RETRY_GAP_MS = 250L
+
+        /** 连续点击同一坐标达到该次数时提示，便于排查「原地死循环」。 */
+        private const val WARN_SAME_POINT_TIMES = 5
     }
 }
