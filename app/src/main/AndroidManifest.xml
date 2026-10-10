@@ -49,6 +49,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- 悬浮窗服务：悬浮球 / 控制面板 / 目标控件（精确录制触摸层 Task 8） -->
+        <service
+            android:name=".service.overlay.OverlayService"
+            android:exported="false" />
     </application>
 
 </manifest>
