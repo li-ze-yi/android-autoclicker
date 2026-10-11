@@ -1,12 +1,18 @@
 package com.autoclicker.service.overlay
 
+import android.animation.ValueAnimator
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.IBinder
 import android.os.SystemClock
 import android.provider.Settings
@@ -14,7 +20,11 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -45,19 +55,34 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * 悬浮窗服务：可拖动悬浮球 + 运行控制台。
  *
- * 悬浮球：单击展开/收起控制台，长按快速开始/停止当前脚本；球体颜色与图标随运行/录制状态变化。
+ * 悬浮球：「暗夜玻璃 · 状态环」——黑玻璃核心 + 状态色亮弧 + 呼吸光晕；
+ * 单击展开/收起控制台，长按快速开始/停止；运行/录制时亮弧旋转、光晕呼吸，
+ * 空闲/暂停完全静止不干扰；拖手后自动吸附到较近的屏幕左右边缘。
  * 控制台：脚本选择 + 开始/暂停/停止、录制控制与手动取点、任务步骤直接编辑、实时日志与当前步骤。
  */
 class OverlayService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    private var ballView: TextView? = null
+    private var ballView: FrameLayout? = null
+
+    /** 玻璃核心（图标）与状态环、呼吸光晕，随运行/录制状态换色与启停动画。 */
+    private var ballCore: TextView? = null
+    private var ballRing: SweepRingView? = null
+    private var ballGlow: View? = null
+
+    /** 亮弧旋转动画与光晕呼吸动画（仅运行/录制时开启，其余状态完全静止）。 */
+    private var ringAnimator: ValueAnimator? = null
+    private var glowAnimator: ValueAnimator? = null
+
+    /** 拖动结束后的边缘吸附动画，再次拖动时先取消。 */
+    private var snapAnimator: ValueAnimator? = null
     private var consoleView: View? = null
 
     /** 悬浮球的窗口参数（拖动时原地更新，用于计算控制台位置避免重叠）。 */
@@ -255,7 +280,7 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    // ---------------- 悬浮球 ----------------
+    // ---------------- 悬浮球（暗夜玻璃 · 状态环） ----------------
 
     private fun showFloatingBall() {
         if (ballView != null) return
@@ -264,13 +289,58 @@ class OverlayService : Service() {
             return
         }
         val size = dp(BALL_SIZE_DP)
-        val ball = TextView(this).apply {
+        val container = FrameLayout(this)
+
+        // 光晕：状态色的径向渐变，空闲时完全隐藏，运行/录制时呼吸。
+        val glow = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(size, size)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                gradientType = GradientDrawable.RADIAL_GRADIENT
+                setColors(intArrayOf(0x66FFFFFF, Color.TRANSPARENT))
+                gradientRadius = size / 2f
+            }
+            alpha = 0f
+        }
+
+        // 状态环：低透明度底环 + 一段旋转的渐变亮弧（自绘）。
+        val ring = SweepRingView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(size, size)
+        }
+
+        // 玻璃核心：暗色径向渐变 + 细亮描边，中心是状态图标。
+        val core = TextView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(CORE_SIZE_DP), dp(CORE_SIZE_DP)).also {
+                it.gravity = Gravity.CENTER
+            }
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            textSize = 18f
-            background = oval(ballColor(), strokeWidthDp = 2)
+            textSize = 17f
+            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x99000000.toInt())
+            background = glassCoreDrawable()
             text = ballIcon()
         }
+
+        // 高光：左上角的小片镜面反光，玻璃质感的关键一笔。
+        val highlight = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(15), dp(11)).also {
+                it.gravity = Gravity.TOP or Gravity.START
+                it.marginStart = dp(12)
+                it.topMargin = dp(10)
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                gradientType = GradientDrawable.RADIAL_GRADIENT
+                setColors(intArrayOf(0x5CFFFFFF, Color.TRANSPARENT))
+                gradientRadius = dp(8).toFloat()
+            }
+        }
+
+        container.addView(glow)
+        container.addView(ring)
+        container.addView(core)
+        container.addView(highlight)
+
         val params = WindowManager.LayoutParams(
             size,
             size,
@@ -283,22 +353,37 @@ class OverlayService : Service() {
             x = lastBallX ?: dp(12)
             y = lastBallY ?: dp(160)
         }
-        ball.setOnTouchListener(BallTouchListener(params))
+        container.setOnTouchListener(BallTouchListener(params))
         try {
-            windowManager.addView(ball, params)
+            windowManager.addView(container, params)
         } catch (t: Throwable) {
             RuntimeBus.log(LogLevel.ERROR, "悬浮球创建失败：${t.message}")
             return
         }
-        ballView = ball
+        ballView = container
+        ballCore = core
+        ballRing = ring
+        ballGlow = glow
         ballParams = params
+        refreshBall()
         observeBallState()
+        // 入场：从小到大带回弹，柔和登场。
+        container.scaleX = 0.4f
+        container.scaleY = 0.4f
+        container.alpha = 0f
+        container.animate().scaleX(1f).scaleY(1f).alpha(1f)
+            .setDuration(320L)
+            .setInterpolator(OvershootInterpolator(2.2f))
+            .start()
         RuntimeBus.log("悬浮球已显示（单击展开控制台，长按快速开始/停止）")
     }
 
     private fun hideFloatingBall() {
         ballStateJob?.cancel()
         ballStateJob = null
+        stopBallAnimations()
+        snapAnimator?.cancel()
+        snapAnimator = null
         val view = ballView ?: return
         // 记住位置，重新显示时回到原处。
         ballParams?.let {
@@ -306,6 +391,9 @@ class OverlayService : Service() {
             lastBallY = it.y
         }
         ballView = null
+        ballCore = null
+        ballRing = null
+        ballGlow = null
         ballParams = null
         try {
             windowManager.removeView(view)
@@ -323,11 +411,60 @@ class OverlayService : Service() {
     }
 
     private fun refreshBall() {
-        ballView?.let { ball ->
-            val color = ballColor()
-            ball.background = oval(color, strokeWidthDp = 2)
-            ball.text = ballIcon()
+        val core = ballCore ?: return
+        val ring = ballRing ?: return
+        val glow = ballGlow ?: return
+        val recordingActive = RuntimeBus.recording.value != RecordingState.IDLE
+        val state = RuntimeBus.state.value
+        val accent = ballColor()
+        val active = recordingActive || state == PlaybackState.RUNNING
+        core.text = ballIcon()
+        ring.configure(accent, if (active) RING_ALPHA_ACTIVE else RING_ALPHA_IDLE)
+        (glow.background as? GradientDrawable)?.setColors(
+            intArrayOf(withAlpha(accent, 0x66), Color.TRANSPARENT),
+        )
+        if (active) {
+            startRingAnimation(ring)
+            startGlowAnimation(glow)
+        } else {
+            // 空闲/暂停/出错：动画全停，只留状态色，绝不分散注意力。
+            stopBallAnimations()
+            glow.alpha = if (state == PlaybackState.PAUSED || state == PlaybackState.ERROR) 0.26f else 0f
         }
+    }
+
+    private fun startRingAnimation(ring: SweepRingView) {
+        if (ringAnimator != null) return
+        ringAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
+            duration = RING_ROTATE_MS
+            interpolator = LinearInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { ring.rotationDegrees = it.animatedValue as Float }
+            start()
+        }
+    }
+
+    private fun startGlowAnimation(glow: View) {
+        if (glowAnimator != null) return
+        glowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = GLOW_BREATH_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                glow.alpha = 0.34f + 0.42f * t
+                glow.scaleX = 1f + 0.14f * t
+                glow.scaleY = 1f + 0.14f * t
+            }
+            start()
+        }
+    }
+
+    private fun stopBallAnimations() {
+        ringAnimator?.cancel()
+        ringAnimator = null
+        glowAnimator?.cancel()
+        glowAnimator = null
     }
 
     private fun ballColor(): Int {
@@ -364,12 +501,19 @@ class OverlayService : Service() {
         override fun onTouch(view: View, event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    snapAnimator?.cancel()
+                    snapAnimator = null
                     startX = params.x
                     startY = params.y
                     touchX = event.rawX
                     touchY = event.rawY
                     moved = false
                     downTime = SystemClock.uptimeMillis()
+                    // 按压反馈：轻轻缩小，像被按进玻璃里。
+                    view.animate().scaleX(0.9f).scaleY(0.9f)
+                        .setDuration(90L)
+                        .setInterpolator(DecelerateInterpolator())
+                        .start()
                     return true
                 }
 
@@ -383,15 +527,45 @@ class OverlayService : Service() {
                     return true
                 }
 
-                MotionEvent.ACTION_UP -> {
-                    val held = SystemClock.uptimeMillis() - downTime
-                    if (!moved) {
-                        if (held >= LONG_PRESS_MS) quickToggle() else toggleConsole()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    // 松手回弹。
+                    view.animate().scaleX(1f).scaleY(1f)
+                        .setDuration(160L)
+                        .setInterpolator(OvershootInterpolator(2f))
+                        .start()
+                    if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        val held = SystemClock.uptimeMillis() - downTime
+                        if (!moved) {
+                            if (held >= LONG_PRESS_MS) quickToggle() else toggleConsole()
+                        } else {
+                            snapToEdge(view, params)
+                        }
                     }
                     return true
                 }
             }
             return false
+        }
+
+        /** 拖手后吸附到较近的屏幕左右边缘，悬浮球不再停在内容中间挡视线。 */
+        private fun snapToEdge(view: View, params: WindowManager.LayoutParams) {
+            val margin = dp(EDGE_MARGIN_DP)
+            val screenWidth = resources.displayMetrics.widthPixels
+            val targetX = if (params.x + view.width / 2 < screenWidth / 2) {
+                margin
+            } else {
+                screenWidth - view.width - margin
+            }
+            if (targetX == params.x) return
+            snapAnimator = ValueAnimator.ofInt(params.x, targetX).apply {
+                duration = SNAP_MS
+                interpolator = DecelerateInterpolator()
+                addUpdateListener {
+                    params.x = it.animatedValue as Int
+                    runCatching { windowManager.updateViewLayout(view, params) }
+                }
+                start()
+            }
         }
     }
 
@@ -872,12 +1046,80 @@ class OverlayService : Service() {
 
     // ---------------- 工具 ----------------
 
-    private fun oval(color: Int, strokeWidthDp: Int): GradientDrawable =
-        GradientDrawable().apply {
+    /** 玻璃核心：暗色径向渐变 + 一圈细亮描边，叠成「黑玻璃」的底子。 */
+    private fun glassCoreDrawable(): LayerDrawable {
+        val glass = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(color)
-            setStroke(dp(strokeWidthDp), Color.WHITE)
+            gradientType = GradientDrawable.RADIAL_GRADIENT
+            setColors(intArrayOf(0xF21B1B22.toInt(), 0xD20E0E14.toInt()))
+            gradientRadius = dp(CORE_SIZE_DP) / 2f
+            setStroke(dp(1), 0x3DFFFFFF)
         }
+        return LayerDrawable(arrayOf(glass))
+    }
+
+    private fun withAlpha(color: Int, alpha: Int): Int =
+        (color and 0x00FFFFFF) or (alpha shl 24)
+
+    /**
+     * 状态环自绘视图：低透明度底环 + 一段旋转的渐变亮弧。
+     * 亮弧只占圆周的一段（0.10~0.42），转动时像仪表指针扫过，比整圈描边更有生命感。
+     */
+    private inner class SweepRingView(context: Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val rotateMatrix = Matrix()
+        private var shader: SweepGradient? = null
+        private var arcColor = COLOR_IDLE
+        private var arcAlpha = RING_ALPHA_IDLE
+
+        /** 亮弧当前角度，由动画驱动；每帧只做一次 invalidate。 */
+        var rotationDegrees = 0f
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        fun configure(color: Int, alphaPercent: Int) {
+            arcColor = color
+            arcAlpha = (255 * alphaPercent / 100).coerceIn(0, 255)
+            shader = null // 颜色变了，重建渐变
+            invalidate()
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            shader = null
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val cx = width / 2f
+            val cy = height / 2f
+            val stroke = dp(3).toFloat()
+            val radius = min(cx, cy) - stroke / 2f - dp(1)
+            paint.strokeWidth = stroke
+            // 底环：整圈低透明度，让圆的存在感完整。
+            paint.shader = null
+            paint.color = arcColor
+            paint.alpha = (arcAlpha * 0.3f).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx, cy, radius, paint)
+            // 亮弧：缓存的 SweepGradient 配旋转矩阵，避免每帧分配。
+            val s = shader ?: SweepGradient(
+                cx,
+                cy,
+                intArrayOf(Color.TRANSPARENT, arcColor, arcColor, Color.TRANSPARENT),
+                floatArrayOf(0f, 0.10f, 0.42f, 1f),
+            ).also { shader = it }
+            rotateMatrix.reset()
+            rotateMatrix.postRotate(rotationDegrees, cx, cy)
+            s.setLocalMatrix(rotateMatrix)
+            paint.shader = s
+            paint.alpha = arcAlpha
+            canvas.drawCircle(cx, cy, radius, paint)
+        }
+    }
 
     private fun button(label: String, onClick: () -> Unit): Button =
         Button(this).apply {
@@ -915,11 +1157,13 @@ class OverlayService : Service() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
     companion object {
-        private val COLOR_IDLE = 0xFF2196F3.toInt()
-        private val COLOR_RUNNING = 0xFF12B76A.toInt()
-        private val COLOR_PAUSED = 0xFFEF8C00.toInt()
-        private val COLOR_ERROR = 0xFFD32F2F.toInt()
-        private val COLOR_RECORDING = 0xFFE91E63.toInt()
+        // —— 悬浮球「暗夜玻璃 · 状态环」配色 ——
+        // 空闲是安静的石板蓝；运行是翡翠；暂停是琥珀；出错是珊瑚红；录制是树莓红。
+        private val COLOR_IDLE = 0xFF8A97A8.toInt()
+        private val COLOR_RUNNING = 0xFF34D399.toInt()
+        private val COLOR_PAUSED = 0xFFF5B23F.toInt()
+        private val COLOR_ERROR = 0xFFFF5A52.toInt()
+        private val COLOR_RECORDING = 0xFFFF4D6D.toInt()
         private val CONSOLE_BG = 0xF0000000.toInt()
         private val STATE_COLOR = 0xFF8BC34A.toInt()
         private val STEP_COLOR = 0xFFFFC107.toInt()
@@ -927,7 +1171,22 @@ class OverlayService : Service() {
         private val RECORD_COLOR = 0xFFFF8A80.toInt()
         private val STATUS_BAR_BG = 0xE01B1B1B.toInt()
 
-        private const val BALL_SIZE_DP = 52
+        /** 触摸/视觉容器（含光晕外沿）；玻璃核心略小，留出状态环的位置。 */
+        private const val BALL_SIZE_DP = 64
+        private const val CORE_SIZE_DP = 52
+
+        /** 状态环透明度（百分比）：空闲 40% 安静存在，活跃时近乎全亮。 */
+        private const val RING_ALPHA_IDLE = 40
+        private const val RING_ALPHA_ACTIVE = 92
+
+        /** 亮弧转一圈的周期与光晕呼吸周期。 */
+        private const val RING_ROTATE_MS = 4000L
+        private const val GLOW_BREATH_MS = 1500L
+
+        /** 拖动后吸附到屏幕左右边缘的边距与动画时长。 */
+        private const val EDGE_MARGIN_DP = 10
+        private const val SNAP_MS = 240L
+
         private const val DRAG_SLOP_PX = 8f
         private const val LONG_PRESS_MS = 450L
         private const val CONSOLE_WIDTH_DP = 300
