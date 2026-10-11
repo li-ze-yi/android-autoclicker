@@ -251,16 +251,22 @@ class ActionExecutor(
     // ---------------- 识别点击 ----------------
 
     private suspend fun clickImage(action: ClickImageAction): StepOutcome {
+        // 能力缺失必须先拦下并说明原因：混进识别重试里会静默返回 null，
+        // 最后打出误导性的「未找到图片模板」（相似度还是上一次的陈旧值）。
+        val finder = Platform.images()
+        if (finder == null) {
+            RuntimeBus.log(LogLevel.WARN, "图像识别能力不可用（无障碍服务未就绪），无法识别图片模板")
+            return StepOutcome(success = false)
+        }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrameWithRetry() ?: return@retryDetect null
-            val finder = Platform.images() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             val region = action.region?.let { frameMapper.toPixel(it) }
             finder.find(action.templateId, action.similarity, region, frame)
         }
         val name = templateName(action.templateId)
         // 带上相似度：能区分「画面里确实还有目标」（分数远高于阈值）和「擦边误判」（贴着阈值）。
-        val score = Platform.images()?.lastScore()
+        val score = finder.lastScore()
         val scoreText = score?.let { "（相似度 %.2f，阈值 %.2f）".format(it, action.similarity) } ?: ""
         if (hit == null) {
             RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
@@ -272,9 +278,13 @@ class ActionExecutor(
     }
 
     private suspend fun clickColor(action: ClickColorAction): StepOutcome {
+        val finder = Platform.colors()
+        if (finder == null) {
+            RuntimeBus.log(LogLevel.WARN, "颜色识别能力不可用，无法识别目标颜色")
+            return StepOutcome(success = false)
+        }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrameWithRetry() ?: return@retryDetect null
-            val finder = Platform.colors() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             finder.find(action.color, action.tolerance, frameMapper.toPixel(action.region), frame)
         }
@@ -287,8 +297,12 @@ class ActionExecutor(
     }
 
     private suspend fun clickText(action: ClickTextAction): StepOutcome {
+        val locator = Platform.nodes()
+        if (locator == null) {
+            RuntimeBus.log(LogLevel.WARN, "节点查找能力不可用，无法识别文字")
+            return StepOutcome(success = false)
+        }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val locator = Platform.nodes() ?: return@retryDetect null
             val nodes = locator.readAllText()
             val currentMapper = mapper()
             val region = action.region?.let { currentMapper.toPixel(it) }
@@ -315,8 +329,12 @@ class ActionExecutor(
     }
 
     private suspend fun clickNode(action: ClickNodeAction): StepOutcome {
+        val locator = Platform.nodes()
+        if (locator == null) {
+            RuntimeBus.log(LogLevel.WARN, "节点查找能力不可用，无法按节点点击")
+            return StepOutcome(success = false)
+        }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val locator = Platform.nodes() ?: return@retryDetect null
             val list = locator.findNodes(action.selector)
             val info = list.getOrNull(action.selector.index.coerceAtLeast(0)) ?: return@retryDetect null
             PixelPoint(info.bounds.centerX, info.bounds.centerY)

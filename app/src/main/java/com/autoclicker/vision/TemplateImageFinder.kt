@@ -1,5 +1,7 @@
 package com.autoclicker.vision
 
+import com.autoclicker.core.bus.LogLevel
+import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.data.repository.TemplateRepository
 import com.autoclicker.domain.model.PixelPoint
 import com.autoclicker.domain.model.PixelRect
@@ -28,7 +30,14 @@ class TemplateImageFinder(
         region: PixelRect?,
         frame: ScreenFrame,
     ): PixelPoint? {
-        val template = templateRepository.loadBitmap(templateId) ?: return null
+        val template = templateRepository.loadBitmap(templateId)
+        if (template == null) {
+            // 与「画面里没有目标」区分开：模板文件缺失属于配置问题，
+            // 且此时不能沿用上一次匹配的相似度（陈旧值会误导日志排查）。
+            lastScoreValue = null
+            RuntimeBus.log(LogLevel.WARN, "模板文件不存在或加载失败：$templateId")
+            return null
+        }
         val tw = template.width
         val th = template.height
         if (tw <= 0 || th <= 0) return null

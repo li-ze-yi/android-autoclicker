@@ -53,7 +53,11 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
 
     override suspend fun play(script: Script) {
         val token = runToken.incrementAndGet()
+        // 等上一个任务真正退出再开新的：快速连点「开始」时，旧任务若还挂在
+        // 截屏超时/手势回调等待上，新旧两个解释器会并发派发手势、互相干扰。
+        // 取消是协作式的，挂起中的旧任务立即退出；最多再等一段非挂起计算（如匹配扫描）。
         job?.cancel()
+        job?.join()
         RuntimeBus.clearLogs()
         RuntimeBus.setCurrentStep(null)
         paused.value = false

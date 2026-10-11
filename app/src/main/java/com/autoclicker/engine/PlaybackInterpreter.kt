@@ -72,7 +72,20 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                     val outcome = runner.run(ins.step, ctx)
                     outcomes[ins.stepId] = outcome
                     if (outcome.endTask) return
-                    pc = outcome.jumpTargetStepId?.let { plan.stepIndex[it] } ?: (pc + 1)
+                    val jumpTarget = outcome.jumpTargetStepId
+                    pc = if (jumpTarget == null) {
+                        pc + 1
+                    } else {
+                        val idx = plan.stepIndex[jumpTarget]
+                        if (idx == null) {
+                            // 与 BranchIns 同理：目标步骤被删掉时明确提示，
+                            // 否则用户以为「跳转不可用」，实际上是被静默跳过了。
+                            RuntimeBus.log(LogLevel.WARN, "跳转目标步骤已不存在，改为继续下一步：$jumpTarget")
+                            pc + 1
+                        } else {
+                            idx
+                        }
+                    }
                 }
 
                 is DelayIns -> {
