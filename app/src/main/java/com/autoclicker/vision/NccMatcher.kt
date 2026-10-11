@@ -2,6 +2,10 @@ package com.autoclicker.vision
 
 import com.autoclicker.domain.model.PixelPoint
 import com.autoclicker.domain.model.PixelRect
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import kotlin.math.sqrt
 
 /**
@@ -21,6 +25,19 @@ import kotlin.math.sqrt
  * 1 表示完全相同，低于阈值返回 null。对亮度整体偏移/增益具有鲁棒性。
  */
 object NccMatcher {
+
+    /**
+     * 扫描线程池：各扫描块只读共享数组，无锁竞争；守护线程不阻止进程退出。
+     * 识别是执行循环里最耗时的环节，并行化可让每次识别提速数倍。
+     */
+    private val scanPool: ExecutorService by lazy {
+        Executors.newFixedThreadPool(scanParallelism) { r ->
+            Thread(r, "ncc-scan").apply { isDaemon = true }
+        }
+    }
+
+    /** 并行度：取 CPU 核数，限制在 [2, 6]，避免在低端机或模拟器上开过多线程。 */
+    private val scanParallelism: Int by lazy { Runtime.getRuntime().availableProcessors().coerceIn(2, 6) }
 
     /**
      * 匹配结果。[point] 为命中的中心点（未达阈值时为 null），[score] 为本次搜索的最高相似度
@@ -207,6 +224,73 @@ object NccMatcher {
         val fx1 = (winR / f).coerceIn(0, maxFx)
         val fy1 = (winB / f).coerceIn(0, maxFy)
 
+        return scanRows(scene.data, swc, tpl.data, twc, thc, tMean, tNorm, fx0, fy0, fx1, fy1, deadlineNs)
+    }
+
+    /**
+     * 在 [fx0, fx1] × [fy0, fy1] 网格上搜索最优窗口。行数较多时按 CPU 核数切块并行：
+     * 各块只读共享数组、无锁竞争，合并取全局最优（与单线程结果一致）。
+     */
+    private fun scanRows(
+        scene: DoubleArray,
+        sw: Int,
+        tpl: DoubleArray,
+        tw: Int,
+        th: Int,
+        tMean: Double,
+        tNorm: Double,
+        fx0: Int,
+        fy0: Int,
+        fx1: Int,
+        fy1: Int,
+        deadlineNs: Long,
+    ): LevelResult {
+        val rows = fy1 - fy0 + 1
+        if (rows < PARALLEL_MIN_ROWS) {
+            return scanRowsRange(scene, sw, tpl, tw, th, tMean, tNorm, fx0, fy0, fx1, fy1, deadlineNs)
+        }
+        val chunkRows = (rows + scanParallelism - 1) / scanParallelism
+        val futures = ArrayList<Future<LevelResult>>(scanParallelism)
+        var start = fy0
+        while (start <= fy1) {
+            val s = start
+            val e = minOf(start + chunkRows - 1, fy1)
+            futures.add(
+                scanPool.submit(
+                    Callable {
+                        scanRowsRange(scene, sw, tpl, tw, th, tMean, tNorm, fx0, s, fx1, e, deadlineNs)
+                    },
+                ),
+            )
+            start = e + 1
+        }
+        var bestScore = -1.0
+        var best = LevelResult(fx0, fy0, -1.0)
+        for (fu in futures) {
+            val r = fu.get()
+            if (r.score > bestScore) {
+                bestScore = r.score
+                best = r
+            }
+        }
+        return best
+    }
+
+    /** 单线程扫描一段行区间。 */
+    private fun scanRowsRange(
+        scene: DoubleArray,
+        sw: Int,
+        tpl: DoubleArray,
+        tw: Int,
+        th: Int,
+        tMean: Double,
+        tNorm: Double,
+        fx0: Int,
+        fy0: Int,
+        fx1: Int,
+        fy1: Int,
+        deadlineNs: Long,
+    ): LevelResult {
         var best = -1.0
         var bx = fx0
         var by = fy0
@@ -214,7 +298,7 @@ object NccMatcher {
             // 每 32 行看一次钟，避免高频取时间拖慢内层循环。
             if (deadlineNs > 0L && (fy and 0x1F) == 0 && System.nanoTime() > deadlineNs) break
             for (fx in fx0..fx1) {
-                val score = ncc(scene.data, swc, fx, fy, tpl.data, twc, thc, tMean, tNorm)
+                val score = ncc(scene, sw, fx, fy, tpl, tw, th, tMean, tNorm)
                 if (score > best) {
                     best = score
                     bx = fx
@@ -365,6 +449,9 @@ object NccMatcher {
 
     /** 模板短边达到该值时认为粗搜采样充足，未命中直接判失败，不做兜底复扫。 */
     private const val SMALL_TEMPLATE_SIDE = 64
+
+    /** 扫描行数低于该值时并行收益抵不过线程调度开销，直接单线程扫。 */
+    private const val PARALLEL_MIN_ROWS = 8
 
     /** 半分辨率兜底分数比阈值低超过该值时，不再做原分辨率邻域精修。 */
     private const val FALLBACK_REFINE_MARGIN = 0.10

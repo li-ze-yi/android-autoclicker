@@ -621,8 +621,12 @@ class ActionExecutor(
     private fun randomExtra(range: Long): Long = if (range <= 0) 0L else Random.nextLong(0, range + 1)
 
     companion object {
-        /** 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。 */
-        private const val SETTLE_BEFORE_DETECT_MS = 300L
+        /**
+         * 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。
+         * 手势回调（onCompleted）本身就意味着点击/滑动已执行完，加上截屏通道
+         * 自带的 450ms 节流，150ms 足够；再长只会拖慢「连点」的节奏。
+         */
+        private const val SETTLE_BEFORE_DETECT_MS = 150L
 
         /** 截屏失败时的退避重试次数与间隔（间隔必须大于系统的最小截屏间隔，否则重试也会被拦）。 */
         private const val CAPTURE_RETRY_TIMES = 3
