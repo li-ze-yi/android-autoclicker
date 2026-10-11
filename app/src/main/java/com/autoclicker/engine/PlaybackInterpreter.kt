@@ -123,11 +123,16 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                         RuntimeBus.log(
                             LogLevel.WARN,
                             "步骤已连续自跳转 $MAX_SELF_JUMPS 次（跳转目标为本步骤），" +
-                                "为避免一直原地循环，改为继续下一步",
+                                "为避免一直原地循环，本步骤按失败处理",
                         )
                         selfJumpStepId = null
                         selfJumpCount = 0
-                        pc += 1
+                        // 不能只是 pc+1 —— 那会直接跳过 BranchIns，用户配置的「失败→下一步」
+                        // 就永远不生效，日志里也看不到失败判定。这里按「失败」正常走分支出口。
+                        val failTarget = ins.failureTargetStepId
+                        val failJump = failTarget?.let { plan.stepIndex[it] }
+                        logBranch(false, failTarget, ins.stepId)
+                        pc = failJump ?: (pc + 1)
                     } else {
                         pc = jumped ?: (pc + 1)
                     }

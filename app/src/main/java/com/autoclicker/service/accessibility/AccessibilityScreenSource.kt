@@ -12,6 +12,7 @@ import com.autoclicker.platform.ScreenFrame
 import com.autoclicker.platform.ScreenSource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
@@ -51,17 +52,39 @@ class AccessibilityScreenSource private constructor() : ScreenSource {
         val elapsed = SystemClock.elapsedRealtime() - lastCaptureAt
         val wait = MIN_CAPTURE_INTERVAL_MS - elapsed
         if (wait > 0) delay(wait)
-        val service = provider?.invoke() ?: return null
+        val service = provider?.invoke()
+        if (service == null) {
+            // 以前这里静默 return null，日志上看不出任何原因，表现为「任务卡住、什么也没打印」。
+            RuntimeBus.log(LogLevel.WARN, "截屏服务不可用（无障碍服务未连接或已断开），本次无法截屏")
+            return null
+        }
         val frame = captureOnR(service)
         lastCaptureAt = SystemClock.elapsedRealtime()
         return frame
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
-    private suspend fun captureOnR(service: AccessibilityService): ScreenFrame? =
+    private suspend fun captureOnR(service: AccessibilityService): ScreenFrame? {
+        // takeScreenshot 的回调有可能一直不回来（服务被系统回收、显示设备异常等）。
+        // 没有超时的话协程会永远挂起，整个任务静默卡死、日志一行不打印。
+        var responded = false
+        val frame = withTimeoutOrNull(CAPTURE_TIMEOUT_MS) {
+            requestScreenshot(service) { responded = true }
+        }
+        if (frame == null && !responded) {
+            RuntimeBus.log(LogLevel.WARN, "截屏超时（${CAPTURE_TIMEOUT_MS}ms 未收到系统回调），本次按失败处理")
+        }
+        return frame
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private suspend fun requestScreenshot(
+        service: AccessibilityService,
+        onResponded: () -> Unit,
+    ): ScreenFrame? =
         suspendCancellableCoroutine { cont ->
             try {
-                val accepted = service.takeScreenshot(
+                service.takeScreenshot(
                     Display.DEFAULT_DISPLAY,
                     executor,
                     object : AccessibilityService.TakeScreenshotCallback {
@@ -76,6 +99,7 @@ class AccessibilityScreenSource private constructor() : ScreenSource {
                             } catch (t: Throwable) {
                                 null
                             }
+                            onResponded()
                             if (cont.isActive) cont.resume(frame)
                         }
 
@@ -83,11 +107,14 @@ class AccessibilityScreenSource private constructor() : ScreenSource {
                             // 以前这里静默返回 null，导致「截屏被系统节流」和「画面里没有目标」
                             // 两种情况无法区分，识别点击会误判成失败。现在明确记录原因。
                             RuntimeBus.log(LogLevel.WARN, "截屏失败：${errorName(errorCode)}")
+                            onResponded()
                             if (cont.isActive) cont.resume(null)
                         }
                     },
                 )
             } catch (t: Throwable) {
+                RuntimeBus.log(LogLevel.WARN, "截屏调用异常：${t.message}")
+                onResponded()
                 if (cont.isActive) cont.resume(null)
             }
         }
@@ -109,6 +136,9 @@ class AccessibilityScreenSource private constructor() : ScreenSource {
     companion object {
         /** 系统对 takeScreenshot 的最小调用间隔，留一点余量避免被判定为过于频繁。 */
         private const val MIN_CAPTURE_INTERVAL_MS = 450L
+
+        /** 单次截屏等待系统回调的超时上限，避免回调丢失时协程永远挂起。 */
+        private const val CAPTURE_TIMEOUT_MS = 3000L
 
         @Volatile
         var instance: AccessibilityScreenSource? = null
