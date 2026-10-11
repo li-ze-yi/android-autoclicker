@@ -16,6 +16,12 @@ class TemplateImageFinder(
     private val templateRepository: TemplateRepository,
 ) : ImageFinder {
 
+    /** 最近一次匹配的最高相似度，仅用于日志诊断（判断是不是「擦边命中」）。 */
+    @Volatile
+    private var lastScoreValue: Double? = null
+
+    override fun lastScore(): Double? = lastScoreValue
+
     override suspend fun find(
         templateId: String,
         similarity: Float,
@@ -39,7 +45,7 @@ class TemplateImageFinder(
         val scenePixels = IntArray(sw * sh)
         bitmap.getPixels(scenePixels, 0, sw, 0, 0, sw, sh)
 
-        return NccMatcher.findBest(
+        return NccMatcher.findBestWithScore(
             template = templatePixels,
             tw = tw,
             th = th,
@@ -48,6 +54,6 @@ class TemplateImageFinder(
             sh = sh,
             region = region,
             similarity = similarity,
-        )
+        ).also { lastScoreValue = it.score }.point
     }
 }

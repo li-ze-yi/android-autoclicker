@@ -258,12 +258,16 @@ class ActionExecutor(
             val region = action.region?.let { frameMapper.toPixel(it) }
             finder.find(action.templateId, action.similarity, region, frame)
         }
+        val name = templateName(action.templateId)
+        // 带上相似度：能区分「画面里确实还有目标」（分数远高于阈值）和「擦边误判」（贴着阈值）。
+        val score = Platform.images()?.lastScore()
+        val scoreText = score?.let { "（相似度 %.2f，阈值 %.2f）".format(it, action.similarity) } ?: ""
         if (hit == null) {
-            RuntimeBus.log(LogLevel.WARN, "未找到图片模板：${templateName(action.templateId)}")
+            RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
             return StepOutcome(success = false)
         }
         val point = mapper().jitter(hit, action.randomOffset)
-        RuntimeBus.log("识别到模板「${templateName(action.templateId)}」，点击 (${point.x}, ${point.y})")
+        RuntimeBus.log("识别到模板「$name」$scoreText，点击 (${point.x}, ${point.y})")
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -541,7 +545,14 @@ class ActionExecutor(
             if (i < attempts) gate.delay(CAPTURE_RETRY_GAP_MS)
         }
         if (attempts > 1) {
-            RuntimeBus.log(LogLevel.ERROR, "连续 $attempts 次截屏失败，本步骤无法识别")
+            RuntimeBus.log(
+                LogLevel.ERROR,
+                "连续 $attempts 次截屏失败（多半是截屏被系统限制或权限异常），本步骤无法识别；" +
+                    "等待 ${CAPTURE_RECOVER_MS}ms 让截屏通道恢复",
+            )
+            // 无障碍截屏被高频调用后会进入一段「冷却期」，按原节奏重试只会一直失败。
+            // 这里退让较长时间，给系统恢复的机会，否则后续步骤会一直「识别不上」。
+            gate.delay(CAPTURE_RECOVER_MS)
         }
         return null
     }
@@ -613,8 +624,11 @@ class ActionExecutor(
         /** 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。 */
         private const val SETTLE_BEFORE_DETECT_MS = 300L
 
-        /** 截屏失败时的退避重试次数与间隔。 */
+        /** 截屏失败时的退避重试次数与间隔（间隔必须大于系统的最小截屏间隔，否则重试也会被拦）。 */
         private const val CAPTURE_RETRY_TIMES = 3
-        private const val CAPTURE_RETRY_GAP_MS = 250L
+        private const val CAPTURE_RETRY_GAP_MS = 600L
+
+        /** 连续截屏失败后的冷却时长，等系统的截屏限流恢复。 */
+        private const val CAPTURE_RECOVER_MS = 1500L
     }
 }

@@ -96,6 +96,9 @@ interface ImageFinder {
         region: PixelRect?,
         frame: ScreenFrame,
     ): PixelPoint?
+
+    /** 最近一次 [find] 的最高相似度（含未达阈值的情况），仅用于日志诊断；不实现则返回 null。 */
+    fun lastScore(): Double? = null
 }
 
 /** 找色能力。 */

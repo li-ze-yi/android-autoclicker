@@ -20,6 +20,12 @@ import kotlin.math.sqrt
 object NccMatcher {
 
     /**
+     * 匹配结果。[point] 为命中的中心点（未达阈值时为 null），[score] 为本次搜索的最高相似度
+     * （未达阈值时也照样带回来，便于在日志里判断「就差一点点」还是「根本不是同一个东西」）。
+     */
+    data class MatchResult(val point: PixelPoint?, val score: Double)
+
+    /**
      * 在 [scene] 内查找 [template] 的最佳匹配位置。
      *
      * @param template 模板像素（ARGB），长度为 tw*th
@@ -41,10 +47,21 @@ object NccMatcher {
         sh: Int,
         region: PixelRect?,
         similarity: Float,
-    ): PixelPoint? {
-        if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) return null
-        if (template.size < tw * th || scene.size < sw * sh) return null
-        if (tw > sw || th > sh) return null
+    ): PixelPoint? = findBestWithScore(template, tw, th, scene, sw, sh, region, similarity).point
+
+    fun findBestWithScore(
+        template: IntArray,
+        tw: Int,
+        th: Int,
+        scene: IntArray,
+        sw: Int,
+        sh: Int,
+        region: PixelRect?,
+        similarity: Float,
+    ): MatchResult {
+        if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) return MatchResult(null, -1.0)
+        if (template.size < tw * th || scene.size < sw * sh) return MatchResult(null, -1.0)
+        if (tw > sw || th > sh) return MatchResult(null, -1.0)
 
         // 裁剪搜索区域
         val rl = (region?.l ?: 0).coerceIn(0, sw)
@@ -53,7 +70,7 @@ object NccMatcher {
         val rb = (region?.b ?: sh).coerceIn(0, sh)
         val rw = rr - rl
         val rh = rb - rt
-        if (rw < tw || rh < th) return null
+        if (rw < tw || rh < th) return MatchResult(null, -1.0)
 
         // 子画面灰度化
         val sceneGray = DoubleArray(rw * rh)
@@ -71,7 +88,7 @@ object NccMatcher {
 
         val maxX = rw - tw
         val maxY = rh - th
-        if (maxX < 0 || maxY < 0) return null
+        if (maxX < 0 || maxY < 0) return MatchResult(null, -1.0)
 
         // 选择起始降采样倍数
         val startFactor = when {
@@ -131,9 +148,9 @@ object NccMatcher {
             }
         }
 
-        if (bestScore < similarity) return null
+        if (bestScore < similarity) return MatchResult(null, bestScore)
         // 返回匹配区域中心点，便于直接作为点击坐标
-        return PixelPoint(rl + bestX + tw / 2, rt + bestY + th / 2)
+        return MatchResult(PixelPoint(rl + bestX + tw / 2, rt + bestY + th / 2), bestScore)
     }
 
     /** 单层搜索结果：坐标为该降采样层坐标系下的模板左上角。 */
