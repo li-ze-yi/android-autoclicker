@@ -85,6 +85,12 @@ class OverlayService : Service() {
     private var snapAnimator: ValueAnimator? = null
     private var consoleView: View? = null
 
+    /** 侧坞长条：贴边的竖排快捷控制，点悬浮球默认展开它而不是一大块控制台。 */
+    private var railView: LinearLayout? = null
+    private var railLed: View? = null
+    private var railPlay: TextView? = null
+    private var railRecord: TextView? = null
+
     /** 悬浮球的窗口参数（拖动时原地更新，用于计算控制台位置避免重叠）。 */
     private var ballParams: WindowManager.LayoutParams? = null
 
@@ -405,8 +411,8 @@ class OverlayService : Service() {
     private fun observeBallState() {
         ballStateJob?.cancel()
         ballStateJob = scope.launch {
-            launch { RuntimeBus.state.collect { refreshBall() } }
-            launch { RuntimeBus.recording.collect { refreshBall() } }
+            launch { RuntimeBus.state.collect { refreshBall(); refreshRail() } }
+            launch { RuntimeBus.recording.collect { refreshBall(); refreshRail() } }
         }
     }
 
@@ -575,7 +581,13 @@ class OverlayService : Service() {
             OverlayStepEditor.close()
             return
         }
-        if (consoleView == null) showConsole() else hideConsole()
+        when {
+            // 完整控制台开着 → 直接收起，回到只剩悬浮球。
+            consoleView != null -> hideConsole()
+            // 默认只展开「侧坞长条」：贴边、竖排常用按钮，不遮内容。
+            railView != null -> hideRail()
+            else -> showRail()
+        }
     }
 
     /** 长按悬浮球：运行中/暂停时停止，否则开始选中（或首个）脚本。 */
@@ -598,6 +610,178 @@ class OverlayService : Service() {
         }
     }
 
+    // ---------------- 侧坞长条（贴边快捷控制） ----------------
+
+    /**
+     * 点悬浮球默认展开的不是大控制台，而是这条贴边的细长条：
+     * 状态灯 + 开始/暂停 + 停止 + 录制 + 展开完整控制台 + 收起，竖排一列，
+     * 只占屏幕边上一小条，几乎不挡内容。想看日志/编辑步骤再点「展开」。
+     */
+    private fun showRail() {
+        if (railView != null) return
+        if (!Settings.canDrawOverlays(this)) return
+        if (consoleView != null) hideConsole()
+        if (OverlayStepEditor.isOpen()) OverlayStepEditor.close()
+
+        val rail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(6), dp(9), dp(6), dp(9))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(26).toFloat()
+                setColor(CONSOLE_BG)
+                setStroke(dp(1), 0x30FFFFFF)
+            }
+        }
+
+        fun railButton(icon: String, tint: Int = Color.WHITE, onClick: () -> Unit): TextView =
+            TextView(this).apply {
+                text = icon
+                gravity = Gravity.CENTER
+                textSize = 15f
+                setTextColor(tint)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(0x22FFFFFF)
+                    setStroke(dp(1), 0x24FFFFFF)
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(36), dp(36))
+                setOnClickListener { onClick() }
+            }
+
+        fun gap(h: Int) = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(1, dp(h))
+        }
+
+        fun divider() = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(1)).also { it.gravity = Gravity.CENTER_HORIZONTAL }
+            setBackgroundColor(0x26FFFFFF)
+        }
+
+        // 状态灯：颜色与悬浮球状态环同步。
+        val led = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(9), dp(9)).also { it.gravity = Gravity.CENTER_HORIZONTAL }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(COLOR_IDLE)
+            }
+        }
+        rail.addView(led)
+        rail.addView(gap(9))
+
+        val play = railButton("▶") {
+            val player = ServiceLocator.player
+            when (RuntimeBus.state.value) {
+                PlaybackState.RUNNING -> {
+                    player?.pause()
+                    RuntimeBus.log("侧坞：暂停")
+                }
+                PlaybackState.PAUSED -> {
+                    player?.resume()
+                    RuntimeBus.log("侧坞：继续")
+                }
+                else -> startSelectedScript()
+            }
+        }
+        railPlay = play
+        rail.addView(play)
+        rail.addView(gap(7))
+
+        rail.addView(
+            railButton("■") {
+                ServiceLocator.player?.stop()
+                RuntimeBus.log("侧坞：停止")
+            },
+        )
+        rail.addView(gap(7))
+
+        val record = railButton("●", tint = RECORD_COLOR) {
+            if (!RecordingSession.isActive) {
+                Toast.makeText(this, "请先创建或打开一个任务，再开始录制", Toast.LENGTH_SHORT).show()
+                return@railButton
+            }
+            if (!PermissionChecker.requireAccessibility(this)) return@railButton
+            if (Recorder.isRecording()) Recorder.stop(this) else Recorder.start(this)
+            RuntimeBus.log(if (Recorder.isRecording()) "侧坞：录制开始" else "侧坞：录制停止")
+        }
+        railRecord = record
+        rail.addView(record)
+        rail.addView(gap(9))
+        rail.addView(divider())
+        rail.addView(gap(9))
+
+        rail.addView(
+            railButton("▤") {
+                hideRail()
+                showConsole()
+            },
+        )
+        rail.addView(gap(7))
+
+        rail.addView(
+            railButton("✕", tint = Color.parseColor("#BBBBBB")) {
+                hideRail()
+            },
+        )
+
+        // 定位：贴到悬浮球吸附的那一侧边缘，纵向从球的位置往下排。
+        val dm = resources.displayMetrics
+        val ball = ballParams
+        val dockLeft = ball == null || ball.x + dp(BALL_SIZE_DP) / 2 < dm.widthPixels / 2
+        val params = WindowManager.LayoutParams(
+            dp(RAIL_WIDTH_DP),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = if (dockLeft) dp(RAIL_MARGIN_DP) else dm.widthPixels - dp(RAIL_WIDTH_DP) - dp(RAIL_MARGIN_DP)
+            y = (ball?.y ?: dp(160)).coerceIn(0, (dm.heightPixels - dp(280)).coerceAtLeast(0))
+        }
+        rail.translationX = (if (dockLeft) -1 else 1) * dp(24).toFloat()
+        rail.alpha = 0f
+        try {
+            windowManager.addView(rail, params)
+        } catch (t: Throwable) {
+            RuntimeBus.log(LogLevel.ERROR, "侧坞创建失败：${t.message}")
+            return
+        }
+        railView = rail
+        railLed = led
+        railPlay = play
+        railRecord = record
+        // 入场：从边缘滑入。
+        rail.animate().translationX(0f).alpha(1f)
+            .setDuration(240L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+        RuntimeBus.log("侧坞已展开（▤ 展开完整控制台，✕ 收起）")
+    }
+
+    private fun hideRail() {
+        val view = railView ?: return
+        railView = null
+        railLed = null
+        railPlay = null
+        railRecord = null
+        try {
+            windowManager.removeView(view)
+        } catch (t: Throwable) {
+            // 忽略移除异常。
+        }
+    }
+
+    private fun refreshRail() {
+        val led = railLed ?: return
+        val state = RuntimeBus.state.value
+        val recording = RuntimeBus.recording.value
+        (led.background as? GradientDrawable)?.setColor(ballColor())
+        railPlay?.text = if (state == PlaybackState.RUNNING) "‖" else "▶"
+        railRecord?.text = if (recording == RecordingState.RECORDING) "■" else "●"
+        railRecord?.alpha = if (recording != RecordingState.IDLE) 1f else 0.8f
+    }
+
     // ---------------- 运行控制台 ----------------
 
     private fun showConsole() {
@@ -608,13 +792,19 @@ class OverlayService : Service() {
         }
         // 编辑器占着屏幕时不要再叠一层控制台。
         if (OverlayStepEditor.isOpen()) OverlayStepEditor.close()
+        hideRail()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(CONSOLE_BG)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            // 圆角玻璃面板：不再是生硬的黑色大方块。
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(CONSOLE_BG)
+                setStroke(dp(1), 0x2EFFFFFF)
+            }
         }
 
-        // 标题行：左侧标题 + 右侧醒目的「缩小」按钮（收起控制台，仅留悬浮球）
+        // 标题行：左侧标题 + 右侧「缩小」（收到侧坞长条，不直接消失）
         val titleRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -627,7 +817,7 @@ class OverlayService : Service() {
             },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
-        titleRow.addView(button("缩小") { hideConsole() })
+        titleRow.addView(button("缩小") { showRail() })
         root.addView(titleRow)
 
         // 脚本选择（悬浮窗内不使用弹出菜单，避免不可聚焦窗口收不到点击）
@@ -1127,7 +1317,15 @@ class OverlayService : Service() {
             textSize = 11f
             minimumWidth = 0
             minimumHeight = 0
-            setPadding(dp(8), dp(2), dp(8), dp(2))
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            // 统一「胶囊」按钮：深色玻璃底 + 细描边，与悬浮球一套视觉语言。
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0x24FFFFFF)
+                setStroke(dp(1), 0x2EFFFFFF)
+            }
             setOnClickListener { onClick() }
         }
 
@@ -1186,6 +1384,10 @@ class OverlayService : Service() {
         /** 拖动后吸附到屏幕左右边缘的边距与动画时长。 */
         private const val EDGE_MARGIN_DP = 10
         private const val SNAP_MS = 240L
+
+        /** 侧坞长条：窗口宽度与贴边距离。 */
+        private const val RAIL_WIDTH_DP = 52
+        private const val RAIL_MARGIN_DP = 6
 
         private const val DRAG_SLOP_PX = 8f
         private const val LONG_PRESS_MS = 450L
