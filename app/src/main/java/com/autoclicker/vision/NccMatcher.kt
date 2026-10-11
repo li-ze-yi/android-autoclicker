@@ -12,7 +12,9 @@ import kotlin.math.sqrt
  * 性能策略：
  * 1. 先按搜索区域（region）裁剪出子画面并转灰度，避免处理整屏；
  * 2. 多尺度金字塔：各自按 4/2 倍盒式降采样粗搜，逐级在半倍数局部窗口内精搜；
- * 3. 最后在原始分辨率下于候选点附近的小窗口内逐像素精搜，得到精确坐标。
+ * 3. 最后在原始分辨率下于候选点附近的小窗口内逐像素精搜，得到精确坐标；
+ * 4. 未达阈值时只做「限时 3 秒 + 半分辨率」的兜底复扫，绝不做整屏原分辨率逐像素扫描
+ *    （那需要数千亿次运算，无目标画面会卡住几分钟且无任何日志）。
  *
  * 相似度采用 Pearson 相关系数（均值-方差归一化），取值 [-1, 1]：
  * 1 表示完全相同，低于阈值返回 null。对亮度整体偏移/增益具有鲁棒性。
@@ -90,12 +92,9 @@ object NccMatcher {
         val maxY = rh - th
         if (maxX < 0 || maxY < 0) return MatchResult(null, -1.0)
 
-        // 选择起始降采样倍数
-        val startFactor = when {
-            tw >= 16 && th >= 16 && rw >= 64 && rh >= 64 -> 4
-            tw >= 8 && th >= 8 && rw >= 32 && rh >= 32 -> 2
-            else -> 1
-        }
+        // 模板近似恒定时 NCC 无定义（任何窗口都算不出相似度），
+        // 直接判定无目标，也避免后续对整屏做无意义的逐像素空扫。
+        if (sqrt(sumSqDev(tplGray, mean(tplGray))) < 1e-6) return MatchResult(null, -1.0)
 
         var bestX = 0
         var bestY = 0
@@ -107,24 +106,30 @@ object NccMatcher {
         var winR = maxX
         var winB = maxY
 
+        // 选择起始降采样倍数
+        val startFactor = when {
+            tw >= 16 && th >= 16 && rw >= 64 && rh >= 64 -> 4
+            tw >= 8 && th >= 8 && rw >= 32 && rh >= 32 -> 2
+            else -> 1
+        }
+
         var f = startFactor
         while (true) {
-            val res = searchLevel(sceneGray, rw, rh, tplGray, tw, th, f, winL, winT, winR, winB)
+            val res = searchLevel(sceneGray, rw, rh, tplGray, tw, th, f, winL, winT, winR, winB, 0L)
             if (f == 1) {
                 bestX = res.x
                 bestY = res.y
                 bestScore = res.score
                 break
             }
-            if (res.score <= -1.0) {
-                // 该降采样层无法计算有效相似度（模板/画面近似恒定），
-                // 放弃金字塔，回到原始分辨率全窗口精搜，避免漏检。
-                winL = 0
-                winT = 0
-                winR = maxX
-                winB = maxY
-                f = 1
-                continue
+            if (res.score <= -1.0 || res.score < similarity - COARSE_REFINE_MARGIN) {
+                // 粗搜就远达不到阈值（或该层无法计算有效相似度）：不值得继续局部细化，
+                // 交给下方「限时的半分辨率兜底复扫」。
+                // 以前这里的做法是回退成「原始分辨率整屏逐像素精搜」：数百万候选位置 ×
+                // 模板数万像素 = 数千亿次运算，无目标画面一跑就是好几分钟且无任何日志，
+                // 表现为任务卡在识别一步、状态一直「运行中」。
+                bestScore = maxOf(bestScore, res.score)
+                break
             }
             // 将粗搜结果映射回原始分辨率，并建立局部精搜窗口
             val cfx = res.x * f
@@ -138,13 +143,14 @@ object NccMatcher {
         }
 
         if (bestScore < similarity) {
-            // 金字塔粗搜可能因模板与降采样网格未对齐而漏检（小模板尤其明显）：
-            // 回退为全分辨率全窗口精搜，保证不漏匹配。仅在快速路径未命中时才付此代价。
-            val full = searchLevel(sceneGray, rw, rh, tplGray, tw, th, 1, 0, 0, maxX, maxY)
-            if (full.score > bestScore) {
-                bestX = full.x
-                bestY = full.y
-                bestScore = full.score
+            // 粗搜/精搜都未达阈值：做一次「半分辨率 + 限时」的兜底复扫，
+            // 覆盖金字塔网格错位导致的漏检。半分辨率比原分辨率便宜约 16 倍，
+            // 且最坏只花 FALLBACK_BUDGET_MS 毫秒，无目标画面几秒内必然返回。
+            val fb = fallbackHalfRes(sceneGray, rw, rh, tplGray, tw, th, maxX, maxY, similarity)
+            if (fb.score > bestScore) {
+                bestX = fb.x
+                bestY = fb.y
+                bestScore = fb.score
             }
         }
 
@@ -159,6 +165,9 @@ object NccMatcher {
     /**
      * 在指定降采样倍数 [f] 下，于原始分辨率窗口 [winL,winT,winR,winB] 内搜索最佳位置。
      * 返回值为该层坐标系下的左上角坐标（乘 f 即得原始分辨率坐标）。
+     *
+     * [deadlineNs] 是可选的时间预算（System.nanoTime() 时刻）；传 0 表示不限时。
+     * 超过预算后停止扫描并返回当前最优——保证最坏情况下也能及时返回结果。
      */
     private fun searchLevel(
         sceneGray: DoubleArray,
@@ -172,6 +181,7 @@ object NccMatcher {
         winT: Int,
         winR: Int,
         winB: Int,
+        deadlineNs: Long,
     ): LevelResult {
         val scene = if (f == 1) GrayImage(sceneGray, rw, rh) else downsample(sceneGray, rw, rh, f)
         val tpl = if (f == 1) GrayImage(tplGray, tw, th) else downsample(tplGray, tw, th, f)
@@ -199,6 +209,8 @@ object NccMatcher {
         var bx = fx0
         var by = fy0
         for (fy in fy0..fy1) {
+            // 每 32 行看一次钟，避免高频取时间拖慢内层循环。
+            if (deadlineNs > 0L && (fy and 0x1F) == 0 && System.nanoTime() > deadlineNs) break
             for (fx in fx0..fx1) {
                 val score = ncc(scene.data, swc, fx, fy, tpl.data, twc, thc, tMean, tNorm)
                 if (score > best) {
@@ -209,6 +221,55 @@ object NccMatcher {
             }
         }
         return LevelResult(bx, by, best)
+    }
+
+    /**
+     * 粗搜未达阈值时的兜底复扫：半分辨率（f=2）整窗搜索 + 时间预算。
+     *
+     * 比旧的「原始分辨率整窗逐像素」便宜约 16 倍，且最坏只花 [FALLBACK_BUDGET_MS] 毫秒，
+     * 避免无目标画面把识别卡住几分钟。返回坐标已换算为原始分辨率（模板左上角）。
+     * 半分辨率网格量化会损失少量分数，因此当分数接近阈值时再在命中邻域做一次原分辨率精修。
+     */
+    private fun fallbackHalfRes(
+        sceneGray: DoubleArray,
+        rw: Int,
+        rh: Int,
+        tplGray: DoubleArray,
+        tw: Int,
+        th: Int,
+        maxX: Int,
+        maxY: Int,
+        similarity: Float,
+    ): LevelResult {
+        val deadline = System.nanoTime() + FALLBACK_BUDGET_MS * 1_000_000L
+        val half = searchLevel(sceneGray, rw, rh, tplGray, tw, th, 2, 0, 0, maxX, maxY, deadline)
+        if (half.score <= -1.0) return half
+        if (half.score < similarity - FALLBACK_REFINE_MARGIN) {
+            // 分数远低于阈值：画面里基本没有目标，没必要再精修。
+            return LevelResult((half.x * 2).coerceAtMost(maxX), (half.y * 2).coerceAtMost(maxY), half.score)
+        }
+        val cfx = half.x * 2
+        val cfy = half.y * 2
+        val rad = 4
+        val fine = searchLevel(
+            sceneGray,
+            rw,
+            rh,
+            tplGray,
+            tw,
+            th,
+            1,
+            (cfx - rad).coerceIn(0, maxX),
+            (cfy - rad).coerceIn(0, maxY),
+            (cfx + rad).coerceIn(0, maxX),
+            (cfy + rad).coerceIn(0, maxY),
+            deadline,
+        )
+        return if (fine.score > half.score) {
+            LevelResult(fine.x, fine.y, fine.score)
+        } else {
+            LevelResult((half.x * 2).coerceAtMost(maxX), (half.y * 2).coerceAtMost(maxY), half.score)
+        }
     }
 
     /** Pearson 相关系数；任一方差为 0 时返回 -1（视为不可匹配）。 */
@@ -296,4 +357,13 @@ object NccMatcher {
         val b = argb and 0xFF
         return 0.299 * r + 0.587 * g + 0.114 * b
     }
+
+    /** 粗搜分数比阈值低超过该值时，不再逐级细化，直接转限时兜底复扫。 */
+    private const val COARSE_REFINE_MARGIN = 0.15
+
+    /** 半分辨率兜底分数比阈值低超过该值时，不再做原分辨率邻域精修。 */
+    private const val FALLBACK_REFINE_MARGIN = 0.10
+
+    /** 兜底复扫的时间预算（毫秒）：无论画面多大、模板多大，最坏也只花这么多时间。 */
+    private const val FALLBACK_BUDGET_MS = 3_000L
 }
