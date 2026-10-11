@@ -13,8 +13,9 @@ import kotlin.math.sqrt
  * 1. 先按搜索区域（region）裁剪出子画面并转灰度，避免处理整屏；
  * 2. 多尺度金字塔：各自按 4/2 倍盒式降采样粗搜，逐级在半倍数局部窗口内精搜；
  * 3. 最后在原始分辨率下于候选点附近的小窗口内逐像素精搜，得到精确坐标；
- * 4. 未达阈值时只做「限时 3 秒 + 半分辨率」的兜底复扫，绝不做整屏原分辨率逐像素扫描
- *    （那需要数千亿次运算，无目标画面会卡住几分钟且无任何日志）。
+ * 4. 未达阈值时：大模板（短边 ≥64px，粗搜采样充足）直接判失败、快速返回；
+ *    小模板才做「限时 3 秒 + 半分辨率」的兜底复扫防漏检。绝不做整屏原分辨率
+ *    逐像素扫描（那需要数千亿次运算，无目标画面会卡住几分钟且无任何日志）。
  *
  * 相似度采用 Pearson 相关系数（均值-方差归一化），取值 [-1, 1]：
  * 1 表示完全相同，低于阈值返回 null。对亮度整体偏移/增益具有鲁棒性。
@@ -142,10 +143,11 @@ object NccMatcher {
             f = if (f >= 4) 2 else 1
         }
 
-        if (bestScore < similarity) {
-            // 粗搜/精搜都未达阈值：做一次「半分辨率 + 限时」的兜底复扫，
-            // 覆盖金字塔网格错位导致的漏检。半分辨率比原分辨率便宜约 16 倍，
-            // 且最坏只花 FALLBACK_BUDGET_MS 毫秒，无目标画面几秒内必然返回。
+        if (bestScore < similarity && minOf(tw, th) < SMALL_TEMPLATE_SIDE) {
+            // 仅小模板需要兜底复扫：小模板降采样后剩余采样点太少，粗搜网格可能
+            // 整个漏掉真实目标（单元测试有此用例）。半分辨率 + 限时，防「明明有却报没有」。
+            // 大模板在粗搜网格上采样充足，峰位可靠——未命中就是真没有，
+            // 直接返回失败，让用户配置的「失败跳转」立刻生效，不做多余扫描。
             val fb = fallbackHalfRes(sceneGray, rw, rh, tplGray, tw, th, maxX, maxY, similarity)
             if (fb.score > bestScore) {
                 bestX = fb.x
@@ -360,6 +362,9 @@ object NccMatcher {
 
     /** 粗搜分数比阈值低超过该值时，不再逐级细化，直接转限时兜底复扫。 */
     private const val COARSE_REFINE_MARGIN = 0.15
+
+    /** 模板短边达到该值时认为粗搜采样充足，未命中直接判失败，不做兜底复扫。 */
+    private const val SMALL_TEMPLATE_SIDE = 64
 
     /** 半分辨率兜底分数比阈值低超过该值时，不再做原分辨率邻域精修。 */
     private const val FALLBACK_REFINE_MARGIN = 0.10
