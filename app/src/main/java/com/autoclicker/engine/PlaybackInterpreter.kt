@@ -48,7 +48,6 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
     ) {
         val counters = HashMap<Int, Int>()
         val outcomes = HashMap<String, StepOutcome>()
-        val notifiedBranches = HashSet<String>()
         val total = plan.stepIndex.size
         var pc = 0
         var guard = 0
@@ -105,7 +104,7 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
                         // 目标步骤被删掉了：不再静默跳过，明确提示，否则用户会以为「跳转不可用」。
                         RuntimeBus.log(LogLevel.WARN, "跳转目标步骤已不存在，改为继续下一步：$target")
                     }
-                    logBranchOnce(ins.stepId, outcome?.success, target, notifiedBranches)
+                    logBranch(outcome?.success, target, ins.stepId)
                     // 自跳转熔断：跳转目标就是本步骤时（如「成功→本步骤」），只要条件一直成立
                     // 就会无限原地打转、永远走不到下一步。超过上限强制继续下一步。
                     val selfJump = target != null && target == ins.stepId && jumped != null
@@ -147,20 +146,22 @@ class PlaybackInterpreter(private val plan: PlaybackPlan) {
         const val MAX_SELF_JUMPS = 10
     }
 
-    /** 每条分支判定在本次运行里只记一次日志，避免自跳转重试循环刷屏。 */
-    private fun logBranchOnce(
-        stepId: String,
-        success: Boolean?,
-        target: String?,
-        notified: MutableSet<String>,
-    ) {
-        if (!notified.add("$stepId|$success|$target")) return
+    /**
+     * 记录一次分支判定。每次触发都记一条，而不是只记第一次——
+     * 「成功→本步骤」这类循环在日志里必须能一眼看到「识别成功 → 跳转回去 → 再识别成功」，
+     * 否则会被误判成「一直成功但没跳转」的死循环。
+     */
+    private fun logBranch(success: Boolean?, target: String?, stepId: String) {
         val result = when (success) {
             true -> "成功"
             false -> "失败"
             null -> "无结果"
         }
-        val action = target?.let { "跳转到步骤 ${it.take(6)}" } ?: "继续下一步"
+        val action = when {
+            target == null -> "继续下一步"
+            target == stepId -> "跳转回本步骤"
+            else -> "跳转到第 ${plan.stepOrder[target] ?: 0} 步"
+        }
         RuntimeBus.log("分支判定：$result → $action")
     }
 }

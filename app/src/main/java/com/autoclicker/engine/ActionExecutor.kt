@@ -52,7 +52,6 @@ import com.autoclicker.domain.model.VariableOpAction
 import com.autoclicker.domain.rule.CoordinateMapper
 import com.autoclicker.platform.PixelStroke
 import com.autoclicker.platform.ScreenFrame
-import kotlin.math.abs
 import kotlin.random.Random
 
 /**
@@ -74,13 +73,6 @@ class ActionExecutor(
     private val numberCursor = HashMap<String, Long>()
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-
-    /** 上一次图片识别点击的落点与「连续点同一处」次数，用于诊断原地死循环。 */
-    private var lastImageClickPoint: PixelPoint? = null
-    private var samePlaceRepeats = 0
-
-    /** 最近若干次图片命中的位置，用于识别「绕了一圈又回到原点」的原地循环。 */
-    private val recentImageHits = ArrayDeque<PixelPoint>()
 
     @Volatile
     private var lastScreen: Pair<Int, Int>? = null
@@ -271,42 +263,8 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().jitter(hit, action.randomOffset)
-        // 命中位置绕一圈又回到刚点过的地方，说明这一屏已经没有新目标了（剩下的都是点过的），
-        // 此时若继续「成功→本步骤」就会原地打转、永远走不到失败跳转。
-        // 这里主动判定为失败，让「失败→下一步滑动」能正常接管。
-        val repeated = isSamePlace(hit)
-        rememberHit(hit)
-        samePlaceRepeats = if (repeated) samePlaceRepeats + 1 else 0
-        RuntimeBus.log(
-            "识别到模板「${templateName(action.templateId)}」，点击 (${point.x}, ${point.y})" +
-                if (samePlaceRepeats > 0) "（同一批位置第 ${samePlaceRepeats + 1} 次）" else "",
-        )
-        if (samePlaceRepeats >= SAME_PLACE_FAIL_TIMES) {
-            RuntimeBus.log(
-                LogLevel.WARN,
-                "已连续 $SAME_PLACE_FAIL_TIMES 次在相同位置识别到目标，判定为没有新目标，" +
-                    "本步骤按失败处理，转走「失败跳转」",
-            )
-            forgetHits()
-            samePlaceRepeats = 0
-            return StepOutcome(success = false)
-        }
+        RuntimeBus.log("识别到模板「${templateName(action.templateId)}」，点击 (${point.x}, ${point.y})")
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
-    }
-
-    /** 本次命中的位置是否落在最近几次命中过的地方。 */
-    private fun isSamePlace(hit: PixelPoint): Boolean = recentImageHits.any { last ->
-        abs(last.x - hit.x) <= SAME_PLACE_TOLERANCE_PX && abs(last.y - hit.y) <= SAME_PLACE_TOLERANCE_PX
-    }
-
-    private fun rememberHit(hit: PixelPoint) {
-        recentImageHits.addLast(hit)
-        while (recentImageHits.size > SAME_PLACE_WINDOW) recentImageHits.removeFirst()
-    }
-
-    private fun forgetHits() {
-        recentImageHits.clear()
-        lastImageClickPoint = null
     }
 
     private suspend fun clickColor(action: ClickColorAction): StepOutcome {
@@ -658,17 +616,5 @@ class ActionExecutor(
         /** 截屏失败时的退避重试次数与间隔。 */
         private const val CAPTURE_RETRY_TIMES = 3
         private const val CAPTURE_RETRY_GAP_MS = 250L
-
-        /**
-         * 判定「又点回了刚刚点过的目标」的位置容差（像素）。模板中心在不同帧之间会有
-         * 小幅抖动，且同一目标被反复命中时相邻两次的间距可达 200+ 像素，容差取小了会漏判。
-         */
-        private const val SAME_PLACE_TOLERANCE_PX = 300
-
-        /** 参与「原地循环」比对的历史命中数量上限。 */
-        private const val SAME_PLACE_WINDOW = 8
-
-        /** 连续多次命中已点过的位置后，判定为没有新目标，本步骤按失败处理。 */
-        private const val SAME_PLACE_FAIL_TIMES = 5
     }
 }
