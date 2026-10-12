@@ -2,6 +2,7 @@ package com.autoclicker.data.repository
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.domain.codec.DomainJson
@@ -61,11 +62,24 @@ class FileTemplateRepository(baseDir: File) : TemplateRepository {
         readIndex().firstOrNull { it.id == id }
     }
 
+    /**
+     * 已解码模板位图的 LRU 缓存：模板文件不变，识别时没必要每次都「读索引 + 解码 PNG」。
+     *
+     * 按字节数限制总量；**淘汰时只丢引用、不 recycle**——返回的实例可能与界面共用，
+     * 回收会让正在绘制/匹配的一方拿到已回收位图而崩溃。
+     */
+    private val bitmapCache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
     override suspend fun loadBitmap(id: String): Bitmap? = withContext(Dispatchers.IO) {
+        bitmapCache.get(id)?.let { return@withContext it }
         val meta = readIndex().firstOrNull { it.id == id } ?: return@withContext null
         val file = File(dir, meta.fileName)
         if (!file.isFile) return@withContext null
-        BitmapFactory.decodeFile(file.absolutePath)
+        val decoded = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext null
+        bitmapCache.put(id, decoded)
+        decoded
     }
 
     override suspend fun save(
@@ -92,5 +106,12 @@ class FileTemplateRepository(baseDir: File) : TemplateRepository {
         val list = readIndex()
         list.firstOrNull { it.id == id }?.let { File(dir, it.fileName).delete() }
         writeIndex(list.filterNot { it.id == id })
+        // 模板已删除，缓存里的位图必须失效，否则同名/id 复用时拿到旧图。
+        bitmapCache.remove(id)
+    }
+
+    private companion object {
+        /** 模板位图缓存上限：模板通常是裁剪出的小图，8MB 足够放几十张。 */
+        const val MAX_CACHE_BYTES = 8 * 1024 * 1024
     }
 }
