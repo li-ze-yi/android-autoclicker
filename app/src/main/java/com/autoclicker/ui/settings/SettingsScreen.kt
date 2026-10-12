@@ -1,5 +1,8 @@
 package com.autoclicker.ui.settings
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.autoclicker.data.settings.AppSettings
 import com.autoclicker.core.permission.PermissionChecker
+import com.autoclicker.data.update.UpdateChecker
 import com.autoclicker.di.ServiceLocator
 import com.autoclicker.service.overlay.OverlayService
 import com.autoclicker.ui.editor.NumberFieldRow
@@ -58,6 +62,8 @@ fun SettingsScreen(onOpenPermissions: () -> Unit) {
     var opacity by remember(settings.overlayOpacity) {
         mutableStateOf(settings.overlayOpacity)
     }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var updateMessage by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("我的") }) },
@@ -187,11 +193,76 @@ fun SettingsScreen(onOpenPermissions: () -> Unit) {
 
             Spacer(Modifier.height(12.dp))
 
+            // 版本更新
+            SettingCard {
+                Text("版本更新", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "当前版本：${appVersionName(context)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (updateMessage.isNotBlank()) {
+                    Text(
+                        updateMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 6.dp),
+                ) {
+                    Button(
+                        enabled = !checkingUpdate,
+                        onClick = {
+                            checkingUpdate = true
+                            updateMessage = "正在检查…"
+                            scope.launch {
+                                updateMessage = try {
+                                    val latest = UpdateChecker.fetchLatest()
+                                    if (latest.isNewerThanCurrent) {
+                                        "发现新版本 ${latest.tagName}，点「打开下载页」获取"
+                                    } else {
+                                        "已是最新版本（云端 ${latest.tagName}）"
+                                    }
+                                } catch (t: Throwable) {
+                                    "检查失败：${t.message ?: "网络异常"}，可直接点「打开下载页」"
+                                }
+                                checkingUpdate = false
+                            }
+                        },
+                    ) { Text(if (checkingUpdate) "检查中…" else "检查更新") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { openUrl(context, UpdateChecker.RELEASES_PAGE) },
+                    ) { Text("打开下载页") }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
             OutlinedButton(
                 onClick = onOpenPermissions,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("权限开启") }
         }
+    }
+}
+
+/** 读取当前安装包的版本名。 */
+private fun appVersionName(context: Context): String = runCatching {
+    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+}.getOrNull().orEmpty().ifBlank { "未知" }
+
+/** 用浏览器打开链接。 */
+private fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.onFailure {
+        Toast.makeText(context, "无法打开链接：${it.message}", Toast.LENGTH_SHORT).show()
     }
 }
 

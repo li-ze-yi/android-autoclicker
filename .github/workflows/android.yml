@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
+          gradle testDebugUnitTest assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon --stacktrace --console=plain 2>&1 | tee -a build-log.txt
 
       - name: 上传单元测试报告
         if: success()

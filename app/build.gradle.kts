@@ -5,6 +5,12 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+/**
+ * 云端构建号：CI 通过 -PbuildNumber=${{ github.run_number }} 传入，本地无参构建为 0。
+ * 用于版本名展示与「检查更新」的新旧比较。
+ */
+val buildNumber = (findProperty("buildNumber") as String?)?.toIntOrNull() ?: 0
+
 android {
     namespace = "com.autoclicker"
     compileSdk = 35
@@ -13,8 +19,11 @@ android {
         applicationId = "com.autoclicker"
         minSdk = 26
         targetSdk = 35
+        // versionCode 固定：分发靠直接覆盖安装，避免本地无参构建版本号变小导致覆盖被拒。
         versionCode = 2
-        versionName = "2.0"
+        // 版本名带上构建号（如 2.0.78），一眼看出新旧。
+        versionName = if (buildNumber > 0) "2.0.$buildNumber" else "2.0"
+        buildConfigField("int", "BUILD_NUMBER", buildNumber.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -64,6 +73,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
