@@ -83,7 +83,7 @@ interface NodeLocator {
 
     /**
      * 向匹配 [selector] 的输入控件写入文本（无障碍 ACTION_SET_TEXT）。
-     * [clearFirst] 为 true 时先清空原有内容。写入成功返回 true。
+     * [clearFirst] 为 true 时替换原有内容，否则在原内容之后追加。写入成功返回 true。
      */
     suspend fun setText(
         selector: com.autoclicker.domain.model.NodeSelector,

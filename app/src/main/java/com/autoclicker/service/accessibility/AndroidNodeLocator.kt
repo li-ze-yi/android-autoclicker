@@ -44,9 +44,14 @@ class AndroidNodeLocator(
             ?: return false
         return try {
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            if (clearFirst) target.performAction(AccessibilityNodeInfo.ACTION_CLEAR_TEXT)
+            // ACTION_SET_TEXT 是整体替换，系统没有单独的「清空」动作：
+            // clearFirst=false 时把原内容拼在前面，即「追加」语义。
+            val existing = if (clearFirst) "" else target.text?.toString().orEmpty()
             val args = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    existing + text,
+                )
             }
             target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         } catch (t: Throwable) {
