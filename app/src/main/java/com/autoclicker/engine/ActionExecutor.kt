@@ -303,7 +303,7 @@ class ActionExecutor(
         // 识别区域优先级：动作自身 region > 模板默认 region > 全屏。
         val effectiveRegion = action.region ?: templates.get(action.templateId)?.region
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val frame = captureFrameWithRetry() ?: return@retryDetect null
+            val frame = captureFrame() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             val region = effectiveRegion?.let { frameMapper.toPixel(it) }
             finder.find(action.templateId, action.similarity, region, frame)
@@ -331,7 +331,7 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
-            val frame = captureFrameWithRetry() ?: return@retryDetect null
+            val frame = captureFrame() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
             finder.find(action.color, action.tolerance, frameMapper.toPixel(action.region), frame)
         }
@@ -601,33 +601,6 @@ class ActionExecutor(
         return dm.widthPixels to dm.heightPixels
     }
 
-    /**
-     * 带退避重试的截屏。
-     *
-     * 无障碍截屏会被系统按调用间隔节流，一次失败就直接判定「没识别到」会误触发失败跳转；
-     * 这里在采集能力可用时最多重试几次，间隔 [CAPTURE_RETRY_GAP_MS]。
-     */
-    private suspend fun captureFrameWithRetry(): ScreenFrame? {
-        val attempts = if (Platform.screen()?.isReady() == true) CAPTURE_RETRY_TIMES else 1
-        var i = 0
-        while (i < attempts) {
-            captureFrame()?.let { return it }
-            i++
-            if (i < attempts) gate.delay(CAPTURE_RETRY_GAP_MS)
-        }
-        if (attempts > 1) {
-            RuntimeBus.log(
-                LogLevel.ERROR,
-                "连续 $attempts 次截屏失败（多半是截屏被系统限制或权限异常），本步骤无法识别；" +
-                    "等待 ${CAPTURE_RECOVER_MS}ms 让截屏通道恢复",
-            )
-            // 无障碍截屏被高频调用后会进入一段「冷却期」，按原节奏重试只会一直失败。
-            // 这里退让较长时间，给系统恢复的机会，否则后续步骤会一直「识别不上」。
-            gate.delay(CAPTURE_RECOVER_MS)
-        }
-        return null
-    }
-
     private suspend fun captureFrame(): ScreenFrame? {
         val source = Platform.screen()
         if (source == null) {
@@ -668,6 +641,16 @@ class ActionExecutor(
         }
     }
 
+    /**
+     * 识别重试循环：**每次尝试 = 截一次屏 + 识别一次**，节奏完全由动作自配参数决定。
+     *
+     * - 尝试次数 [count]（= 检测次数 detectCount）
+     * - 第 2..N 次尝试之间等待 [intervalMs]（= 检测间隔 detectIntervalMs）
+     * - 第 1 次尝试前只等 [SETTLE_BEFORE_DETECT_MS] 让上一步的画面刷新完，避免拿到旧帧
+     *
+     * 截屏失败与识别失败一样计入本次尝试失败，不再有额外的截屏重试/冷却，
+     * 以免实际节奏与用户设置的参数不一致。
+     */
     private suspend fun <T> retryDetect(count: Int, intervalMs: Long, block: suspend () -> T?): T? {
         val total = count.coerceAtLeast(1)
         var i = 0
@@ -713,14 +696,9 @@ class ActionExecutor(
          * 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。
          * 手势回调（onCompleted）本身就意味着点击/滑动已执行完，加上截屏通道
          * 自带的 450ms 节流，150ms 足够；再长只会拖慢「连点」的节奏。
+         *
+         * 只作用于**第一次**尝试；第 2..N 次尝试的间隔一律用动作自配的 detectIntervalMs。
          */
         private const val SETTLE_BEFORE_DETECT_MS = 150L
-
-        /** 截屏失败时的退避重试次数与间隔（间隔必须大于系统的最小截屏间隔，否则重试也会被拦）。 */
-        private const val CAPTURE_RETRY_TIMES = 3
-        private const val CAPTURE_RETRY_GAP_MS = 600L
-
-        /** 连续截屏失败后的冷却时长，等系统的截屏限流恢复。 */
-        private const val CAPTURE_RECOVER_MS = 1500L
     }
 }
