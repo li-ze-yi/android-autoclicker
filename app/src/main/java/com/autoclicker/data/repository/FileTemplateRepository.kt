@@ -102,7 +102,8 @@ class FileTemplateRepository(baseDir: File) : TemplateRepository {
         writeIndex(readIndex().map { if (it.id == id) it.copy(name = name) else it })
     }
 
-    override suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+    // 显式声明 Unit：块尾的 bitmapCache.remove 会返回 Bitmap?，否则覆盖签名变成非 Unit。
+    override suspend fun delete(id: String): Unit = withContext(Dispatchers.IO) {
         val list = readIndex()
         list.firstOrNull { it.id == id }?.let { File(dir, it.fileName).delete() }
         writeIndex(list.filterNot { it.id == id })
