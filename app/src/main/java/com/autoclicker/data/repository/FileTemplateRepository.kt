@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import com.autoclicker.domain.codec.DomainJson
 import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.PercentRect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
@@ -47,14 +48,18 @@ class FileTemplateRepository(baseDir: File) : TemplateRepository {
         BitmapFactory.decodeFile(file.absolutePath)
     }
 
-    override suspend fun save(name: String, bitmap: Bitmap): ImageTemplate = withContext(Dispatchers.IO) {
+    override suspend fun save(
+        name: String,
+        bitmap: Bitmap,
+        region: PercentRect?,
+    ): ImageTemplate = withContext(Dispatchers.IO) {
         if (!dir.exists()) dir.mkdirs()
         val id = Ids.newId()
         val fileName = "$id.png"
         FileOutputStream(File(dir, fileName)).use { out ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
-        val meta = ImageTemplate(id, name, fileName, bitmap.width, bitmap.height)
+        val meta = ImageTemplate(id, name, fileName, bitmap.width, bitmap.height, region = region)
         writeIndex(readIndex() + meta)
         meta
     }

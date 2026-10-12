@@ -1,5 +1,6 @@
 package com.autoclicker.engine
 
+import com.autoclicker.di.ServiceLocator
 import com.autoclicker.domain.model.BoolCombine
 import com.autoclicker.domain.model.CompareOp
 import com.autoclicker.domain.model.ConditionAction
@@ -73,7 +74,9 @@ class ConditionEvaluator(private val gate: PauseGate) {
         val id = clause.templateId ?: return false
         val frame = captureFrame() ?: return false
         val finder = Platform.images() ?: return false
-        val region = clause.region?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
+        // 识别区域优先级：条件子句 region > 模板默认 region > 全屏。
+        val effectiveRegion = clause.region ?: ServiceLocator.templates.get(id)?.region
+        val region = effectiveRegion?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
         return finder.find(id, clause.similarity, region, frame) != null
     }
 

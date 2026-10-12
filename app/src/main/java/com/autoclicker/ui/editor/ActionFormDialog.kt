@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -314,21 +315,13 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
                 if (!PermissionChecker.requireOverlay(context)) return@capture
                 // 截图前先收起悬浮窗，避免悬浮球被截进画面。
                 OverlayService.enterCaptureMode(context)
-                TemplateCaptureOverlay.start(context) { template, region ->
+                TemplateCaptureOverlay.start(context) { template, _ ->
                     OverlayService.exitCaptureMode(context)
                     if (template != null) {
                         extraTemplates = extraTemplates + template
                         templateId = template.id
-                        // 截图时框选的识别区域直接写回表单；未框选（全屏）则清除限定。
-                        if (region != null) {
-                            regionEnabled = true
-                            l = formatPercent(region.l)
-                            t = formatPercent(region.t)
-                            r = formatPercent(region.r)
-                            b = formatPercent(region.b)
-                        } else {
-                            regionEnabled = false
-                        }
+                        // 框选的识别区域已随模板保存，这里只需选中新模板即可；
+                        // 动作上的 region 是「覆盖模板」用的，不在此自动填充。
                         emit()
                     }
                 }
@@ -336,9 +329,20 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
             modifier = Modifier.padding(start = 8.dp),
         ) { Text("截图新建模板") }
     }
+    val templateRegion = allTemplates.firstOrNull { it.id == templateId }?.region
+    Text(
+        "模板识别区域：" + (
+            templateRegion?.let {
+                "已限定 ${formatPercent(it.l)}%,${formatPercent(it.t)}% → ${formatPercent(it.r)}%,${formatPercent(it.b)}%"
+            } ?: "全屏"
+            ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
     NumberFieldRow("相似度（0..1）", similarity) { similarity = it; emit() }
     OffsetFields(offset) { offset = it; emit() }
-    BoolFieldRow("限定识别区域", regionEnabled) { regionEnabled = it; emit() }
+    BoolFieldRow("限定识别区域（覆盖模板）", regionEnabled) { regionEnabled = it; emit() }
     if (regionEnabled) {
         PercentRectFields(l, t, r, b, { l = it; emit() }, { t = it; emit() }, { r = it; emit() }, { b = it; emit() })
     }

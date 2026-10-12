@@ -277,6 +277,15 @@ object TemplateCaptureOverlay {
                 return@barButton
             }
             val regionRect = crop.regionRectInBitmap()
+            // 区域先算好，随模板一起持久化：模板自身保存默认识别区域，动作上可再覆盖。
+            val region = regionRect?.let {
+                PercentRect(
+                    (it.left.toFloat() / src.width).coerceIn(0f, 1f),
+                    (it.top.toFloat() / src.height).coerceIn(0f, 1f),
+                    (it.right.toFloat() / src.width).coerceIn(0f, 1f),
+                    (it.bottom.toFloat() / src.height).coerceIn(0f, 1f),
+                )
+            }
             saving = true
             val name = nameField.text?.toString()?.trim().orEmpty()
                 .ifBlank { "模板_" + System.currentTimeMillis() }
@@ -286,7 +295,7 @@ object TemplateCaptureOverlay {
                 try {
                     cropped = Bitmap.createBitmap(src, templateRect.left, templateRect.top, templateRect.width(), templateRect.height())
                     if (cropped != null) {
-                        template = ServiceLocator.templates.save(name, cropped)
+                        template = ServiceLocator.templates.save(name, cropped, region)
                     }
                 } catch (t: Throwable) {
                     RuntimeBus.log(LogLevel.ERROR, "保存图像模板失败：${t.message}")
@@ -298,14 +307,6 @@ object TemplateCaptureOverlay {
                     } catch (t: Throwable) {
                         // 忽略回收异常。
                     }
-                }
-                val region = regionRect?.let {
-                    PercentRect(
-                        (it.left.toFloat() / src.width).coerceIn(0f, 1f),
-                        (it.top.toFloat() / src.height).coerceIn(0f, 1f),
-                        (it.right.toFloat() / src.width).coerceIn(0f, 1f),
-                        (it.bottom.toFloat() / src.height).coerceIn(0f, 1f),
-                    )
                 }
                 if (template != null) {
                     toast(context, "已添加模板「${template.name}」")

@@ -244,6 +244,16 @@ private fun TemplateRow(
                     text = "${template.width} × ${template.height}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    text = "识别区域：" + (
+                        template.region?.let {
+                            "已限定 ${(it.l * 100).toInt()}%,${(it.t * 100).toInt()}% → " +
+                                "${(it.r * 100).toInt()}%,${(it.b * 100).toInt()}%"
+                        } ?: "全屏"
+                        ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             TextButton(onClick = onRename) { Text("重命名") }
             IconButton(onClick = onDelete) {

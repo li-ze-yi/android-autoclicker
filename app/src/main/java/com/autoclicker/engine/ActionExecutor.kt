@@ -36,6 +36,7 @@ import com.autoclicker.domain.model.NodeSelector
 import com.autoclicker.domain.model.NumberGenMode
 import com.autoclicker.domain.model.OpenAppAction
 import com.autoclicker.domain.model.PercentPoint
+import com.autoclicker.domain.model.PercentRect
 import com.autoclicker.domain.model.PickMode
 import com.autoclicker.domain.model.PixelPoint
 import com.autoclicker.domain.model.PixelRect
@@ -53,6 +54,7 @@ import com.autoclicker.domain.model.VariableOpAction
 import com.autoclicker.domain.rule.CoordinateMapper
 import com.autoclicker.platform.PixelStroke
 import com.autoclicker.platform.ScreenFrame
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -86,20 +88,24 @@ class ActionExecutor(
         val action = step.action
         return when (action) {
             is ClickAction -> {
-                clickPercent(action.point, action.durationMs, action.offset)
-                StepOutcome(success = true)
+                val p = pixelOf(action.point, action.offset)
+                RuntimeBus.log("点击 (${p.x}, ${p.y})")
+                StepOutcome(success = clickPixel(p.x, p.y, action.durationMs))
             }
 
             is LongPressAction -> {
-                clickPercent(action.point, action.durationMs, action.offset)
-                StepOutcome(success = true)
+                val p = pixelOf(action.point, action.offset)
+                RuntimeBus.log("长按 (${p.x}, ${p.y})，${action.durationMs}ms")
+                StepOutcome(success = clickPixel(p.x, p.y, action.durationMs))
             }
 
             is RepeatClickAction -> {
+                val p = pixelOf(action.point, action.offset)
                 val total = action.count.coerceAtLeast(1)
+                RuntimeBus.log("连续点击 (${p.x}, ${p.y}) ×$total，间隔 ${action.intervalMs}ms")
                 var i = 0
                 while (i < total) {
-                    clickPercent(action.point, action.durationMs, action.offset)
+                    clickPixel(p.x, p.y, action.durationMs)
                     i++
                     if (i < total) gate.delay(action.intervalMs.coerceAtLeast(0))
                 }
@@ -110,6 +116,7 @@ class ActionExecutor(
                 val currentMapper = mapper()
                 val picked = currentMapper.randomPointIn(currentMapper.toPixel(action.rect))
                 val point = currentMapper.applyOffset(picked, action.offset)
+                RuntimeBus.log("区域随机点击 → (${point.x}, ${point.y})")
                 clickPixel(point.x, point.y, action.durationMs)
                 StepOutcome(success = true)
             }
@@ -130,6 +137,12 @@ class ActionExecutor(
                     RuntimeBus.log(LogLevel.WARN, "手势能力不可用，无法执行手势")
                     return StepOutcome(success = false)
                 }
+                val pointCount = action.strokes.sumOf { it.points.size }
+                val start = strokes.firstOrNull()?.points?.firstOrNull()
+                RuntimeBus.log(
+                    "手势轨迹：${strokes.size} 条 / $pointCount 个点" +
+                        (if (start != null) "，起点 (${start.x}, ${start.y})" else ""),
+                )
                 executor.perform(strokes)
                 StepOutcome(success = true)
             }
@@ -143,6 +156,7 @@ class ActionExecutor(
                 val currentMapper = mapper()
                 val from = currentMapper.applyOffset(currentMapper.toPixel(action.from), action.offset)
                 val to = currentMapper.applyOffset(currentMapper.toPixel(action.to), action.offset)
+                RuntimeBus.log("滑动 (${from.x}, ${from.y}) → (${to.x}, ${to.y})，${action.durationMs}ms")
                 executor.swipe(from.x, from.y, to.x, to.y, action.durationMs)
                 StepOutcome(success = true)
             }
@@ -156,6 +170,7 @@ class ActionExecutor(
             is ClickNodeAction -> clickNode(action)
 
             is GlobalKeyAction -> {
+                RuntimeBus.log("全局键 ${action.key}")
                 execGlobalKey(action)
                 StepOutcome(success = true)
             }
@@ -166,6 +181,7 @@ class ActionExecutor(
                     RuntimeBus.log(LogLevel.WARN, "全局操作不可用，无法打开应用：${action.packageName}")
                     return StepOutcome(success = false)
                 }
+                RuntimeBus.log("打开应用：${action.packageName}")
                 global.openApp(action.packageName, action.activity)
                 StepOutcome(success = true)
             }
@@ -176,6 +192,7 @@ class ActionExecutor(
                     RuntimeBus.log(LogLevel.WARN, "全局操作不可用，无法关闭应用：${action.packageName}")
                     return StepOutcome(success = false)
                 }
+                RuntimeBus.log("关闭应用：${action.packageName}")
                 global.closeApp(action.packageName)
                 StepOutcome(success = true)
             }
@@ -197,12 +214,20 @@ class ActionExecutor(
 
             is ConditionAction -> {
                 val ok = conditionEvaluator.evaluate(action, ctx) { mapper() }
+                RuntimeBus.log(if (ok) "条件判断 → 满足" else "条件判断 → 不满足")
                 StepOutcome(success = ok)
             }
 
             is JumpAction -> when (action.mode) {
-                JumpMode.END_TASK -> StepOutcome(endTask = true)
-                JumpMode.STEP -> StepOutcome(jumpTargetStepId = action.targetStepId)
+                JumpMode.END_TASK -> {
+                    RuntimeBus.log("跳转：结束任务")
+                    StepOutcome(endTask = true)
+                }
+
+                JumpMode.STEP -> {
+                    RuntimeBus.log("跳转：步骤 ${action.targetStepId ?: "未指定"}")
+                    StepOutcome(jumpTargetStepId = action.targetStepId)
+                }
             }
 
             is CallFunctionAction -> {
@@ -211,24 +236,37 @@ class ActionExecutor(
             }
 
             is DelayAction -> {
-                gate.delay(action.ms + randomExtra(action.randomMs))
+                val extra = randomExtra(action.randomMs)
+                RuntimeBus.log(
+                    if (action.randomMs > 0) {
+                        "延时 ${action.ms}ms（+随机 0..${action.randomMs}ms → 实际 ${action.ms + extra}ms）"
+                    } else {
+                        "延时 ${action.ms}ms"
+                    },
+                )
+                gate.delay(action.ms + extra)
                 StepOutcome(success = true)
             }
 
-            is EmptyAction -> StepOutcome(success = true)
+            is EmptyAction -> {
+                if (action.note.isNotBlank()) RuntimeBus.log("注释：${action.note}")
+                StepOutcome(success = true)
+            }
 
             is ToastAction -> {
+                RuntimeBus.log("Toast 提示：${action.message}")
                 showToast(action.message)
                 StepOutcome(success = true)
             }
 
             is PopupAction -> {
-                RuntimeBus.log(LogLevel.WARN, "弹窗以 Toast 兜底：${action.title}")
+                RuntimeBus.log("弹窗提示：${action.title}｜${action.message}（以 Toast 兜底展示）")
                 showToast("${action.title}：${action.message}")
                 StepOutcome(success = true)
             }
 
             is SpeakAction -> {
+                RuntimeBus.log("语音播报：${action.message}")
                 speak(action.message)
                 StepOutcome(success = true)
             }
@@ -262,10 +300,12 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "图像识别能力不可用（无障碍服务未就绪），无法识别图片模板")
             return StepOutcome(success = false)
         }
+        // 识别区域优先级：动作自身 region > 模板默认 region > 全屏。
+        val effectiveRegion = action.region ?: templates.get(action.templateId)?.region
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrameWithRetry() ?: return@retryDetect null
             val frameMapper = CoordinateMapper(frame.width, frame.height)
-            val region = action.region?.let { frameMapper.toPixel(it) }
+            val region = effectiveRegion?.let { frameMapper.toPixel(it) }
             finder.find(action.templateId, action.similarity, region, frame)
         }
         val name = templateName(action.templateId)
@@ -277,7 +317,10 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
-        RuntimeBus.log("识别到模板「$name」$scoreText，点击 (${point.x}, ${point.y})")
+        RuntimeBus.log(
+            "识别到模板「$name」$scoreText，点击 (${point.x}, ${point.y})" +
+                (if (effectiveRegion != null) "，区域 ${regionText(effectiveRegion)}" else ""),
+        )
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -297,6 +340,7 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
+        RuntimeBus.log("识别到颜色 #%06X，点击 (${point.x}, ${point.y})".format(0xFFFFFF and action.color))
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -330,6 +374,7 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
+        RuntimeBus.log("识别到文字「${action.text}」，点击 (${point.x}, ${point.y})")
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -349,6 +394,7 @@ class ActionExecutor(
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
+        RuntimeBus.log("识别到节点 ${selectorText(action.selector)}，点击 (${point.x}, ${point.y})")
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -356,6 +402,7 @@ class ActionExecutor(
 
     private suspend fun inputText(action: InputTextAction, ctx: ExecutionContext) {
         val text = resolveTextSource(action.source, ctx)
+        RuntimeBus.log("输入文字：\"$text\"（清空后输入=${action.clearFirst}）")
         val locator = Platform.nodes()
         if (locator == null) {
             RuntimeBus.log(LogLevel.WARN, "无障碍节点能力不可用，无法注入文本：\"$text\"")
@@ -601,14 +648,10 @@ class ActionExecutor(
         return frame
     }
 
-    private suspend fun clickPercent(
-        point: PercentPoint,
-        durationMs: Long,
-        offset: ActionOffset = ActionOffset(),
-    ): Boolean {
+    /** 百分比坐标 → 施加偏移后的像素坐标。 */
+    private fun pixelOf(point: PercentPoint, offset: ActionOffset): PixelPoint {
         val currentMapper = mapper()
-        val pixel = currentMapper.applyOffset(currentMapper.toPixel(point), offset)
-        return clickPixel(pixel.x, pixel.y, durationMs)
+        return currentMapper.applyOffset(currentMapper.toPixel(point), offset)
     }
 
     private suspend fun clickPixel(x: Int, y: Int, durationMs: Long): Boolean {
@@ -645,6 +688,22 @@ class ActionExecutor(
         val cx = bounds.centerX
         val cy = bounds.centerY
         return cx >= rect.l && cx <= rect.r && cy >= rect.t && cy <= rect.b
+    }
+
+    /** 区域日志文案：百分比写法，如 "0,0 → 100,50（%）"。 */
+    private fun regionText(rect: PercentRect): String =
+        "${(rect.l * 100).roundToInt()},${(rect.t * 100).roundToInt()}" +
+            " → ${(rect.r * 100).roundToInt()},${(rect.b * 100).roundToInt()}（%）"
+
+    /** 节点选择器日志文案。 */
+    private fun selectorText(selector: NodeSelector): String {
+        val parts = listOfNotNull(
+            selector.text?.let { "文字「$it」" },
+            selector.viewId?.let { "id=$it" },
+            selector.className?.let { "类=$it" },
+            selector.contentDesc?.let { "描述「$it」" },
+        )
+        return if (parts.isEmpty()) "（未设条件）" else parts.joinToString("，")
     }
 
     private fun randomExtra(range: Long): Long = if (range <= 0) 0L else Random.nextLong(0, range + 1)
