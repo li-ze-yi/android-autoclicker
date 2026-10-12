@@ -10,7 +10,7 @@ object FunctionPackageCodec {
         DomainJson.instance.encodeToString(pkg)
 
     fun decode(json: String): FunctionPackage = try {
-        DomainJson.instance.decodeFromString(FunctionPackage.serializer(), json)
+        DomainJson.instance.decodeFromString(FunctionPackage.serializer(), migrateLegacyOffset(json))
     } catch (e: Exception) {
         throw ScriptDataException("函数包解析失败：${e.message}", e)
     }

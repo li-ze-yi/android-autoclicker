@@ -11,6 +11,7 @@ import android.widget.Toast
 import com.autoclicker.core.bus.LogLevel
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.di.ServiceLocator
+import com.autoclicker.domain.model.ActionOffset
 import com.autoclicker.domain.model.AreaRandomClickAction
 import com.autoclicker.domain.model.CallFunctionAction
 import com.autoclicker.domain.model.ClickAction
@@ -85,12 +86,12 @@ class ActionExecutor(
         val action = step.action
         return when (action) {
             is ClickAction -> {
-                clickPercent(action.point, action.durationMs)
+                clickPercent(action.point, action.durationMs, action.offset)
                 StepOutcome(success = true)
             }
 
             is LongPressAction -> {
-                clickPercent(action.point, action.durationMs)
+                clickPercent(action.point, action.durationMs, action.offset)
                 StepOutcome(success = true)
             }
 
@@ -98,7 +99,7 @@ class ActionExecutor(
                 val total = action.count.coerceAtLeast(1)
                 var i = 0
                 while (i < total) {
-                    clickPercent(action.point, action.durationMs)
+                    clickPercent(action.point, action.durationMs, action.offset)
                     i++
                     if (i < total) gate.delay(action.intervalMs.coerceAtLeast(0))
                 }
@@ -107,7 +108,8 @@ class ActionExecutor(
 
             is AreaRandomClickAction -> {
                 val currentMapper = mapper()
-                val point = currentMapper.randomPointIn(currentMapper.toPixel(action.rect))
+                val picked = currentMapper.randomPointIn(currentMapper.toPixel(action.rect))
+                val point = currentMapper.applyOffset(picked, action.offset)
                 clickPixel(point.x, point.y, action.durationMs)
                 StepOutcome(success = true)
             }
@@ -116,7 +118,9 @@ class ActionExecutor(
                 val currentMapper = mapper()
                 val strokes = action.strokes.map { stroke ->
                     PixelStroke(
-                        points = stroke.points.map { currentMapper.toPixel(it) },
+                        points = stroke.points.map {
+                            currentMapper.applyOffset(currentMapper.toPixel(it), action.offset)
+                        },
                         startTimeMs = stroke.startTimeMs,
                         durationMs = stroke.durationMs,
                     )
@@ -137,8 +141,8 @@ class ActionExecutor(
                     return StepOutcome(success = false)
                 }
                 val currentMapper = mapper()
-                val from = currentMapper.toPixel(action.from)
-                val to = currentMapper.toPixel(action.to)
+                val from = currentMapper.applyOffset(currentMapper.toPixel(action.from), action.offset)
+                val to = currentMapper.applyOffset(currentMapper.toPixel(action.to), action.offset)
                 executor.swipe(from.x, from.y, to.x, to.y, action.durationMs)
                 StepOutcome(success = true)
             }
@@ -272,7 +276,7 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
             return StepOutcome(success = false)
         }
-        val point = mapper().jitter(hit, action.randomOffset)
+        val point = mapper().applyOffset(hit, action.offset)
         RuntimeBus.log("识别到模板「$name」$scoreText，点击 (${point.x}, ${point.y})")
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
@@ -292,7 +296,7 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "未找到目标颜色：${Integer.toHexString(action.color)}")
             return StepOutcome(success = false)
         }
-        val point = mapper().jitter(hit, action.randomOffset)
+        val point = mapper().applyOffset(hit, action.offset)
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
@@ -325,7 +329,8 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "未找到文字：${action.text}")
             return StepOutcome(success = false)
         }
-        return StepOutcome(success = clickPixel(hit.x, hit.y, 60))
+        val point = mapper().applyOffset(hit, action.offset)
+        return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
     private suspend fun clickNode(action: ClickNodeAction): StepOutcome {
@@ -343,7 +348,8 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "未找到目标节点：${action.selector}")
             return StepOutcome(success = false)
         }
-        return StepOutcome(success = clickPixel(hit.x, hit.y, 60))
+        val point = mapper().applyOffset(hit, action.offset)
+        return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 
     // ---------------- 内容处理 ----------------
@@ -595,8 +601,13 @@ class ActionExecutor(
         return frame
     }
 
-    private suspend fun clickPercent(point: PercentPoint, durationMs: Long): Boolean {
-        val pixel = mapper().toPixel(point)
+    private suspend fun clickPercent(
+        point: PercentPoint,
+        durationMs: Long,
+        offset: ActionOffset = ActionOffset(),
+    ): Boolean {
+        val currentMapper = mapper()
+        val pixel = currentMapper.applyOffset(currentMapper.toPixel(point), offset)
         return clickPixel(pixel.x, pixel.y, durationMs)
     }
 

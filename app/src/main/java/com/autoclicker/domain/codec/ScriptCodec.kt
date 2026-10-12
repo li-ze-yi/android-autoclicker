@@ -10,7 +10,7 @@ object ScriptCodec {
         DomainJson.instance.encodeToString(script)
 
     fun decode(json: String): Script = try {
-        DomainJson.instance.decodeFromString(Script.serializer(), json)
+        DomainJson.instance.decodeFromString(Script.serializer(), migrateLegacyOffset(json))
     } catch (e: Exception) {
         throw ScriptDataException("脚本解析失败：${e.message}", e)
     }

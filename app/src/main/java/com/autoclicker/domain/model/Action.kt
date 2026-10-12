@@ -9,6 +9,19 @@ import kotlinx.serialization.Serializable
 @Serializable
 sealed interface Action
 
+/**
+ * 像素级偏移量：先按 [dx]/[dy] 固定平移目标坐标，再在 ±[randomRadius] 内随机抖动（拟人化，防检测）。
+ * 仅对带坐标的动作有意义，运行期由 CoordinateMapper 施加。
+ */
+@Serializable
+data class ActionOffset(
+    val dx: Int = 0,
+    val dy: Int = 0,
+    val randomRadius: Int = 0,
+) {
+    val isZero: Boolean get() = dx == 0 && dy == 0 && randomRadius == 0
+}
+
 // ---------------- 点击类 ----------------
 
 /** 单坐标点击；durationMs 决定按压时长（长按形态由 LongPressAction 表达）。 */
@@ -17,6 +30,7 @@ sealed interface Action
 data class ClickAction(
     val point: PercentPoint,
     val durationMs: Long = 60,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 /** 长按。 */
@@ -25,6 +39,7 @@ data class ClickAction(
 data class LongPressAction(
     val point: PercentPoint,
     val durationMs: Long = 800,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 /** 连续点击（连点器）：对同一坐标以 intervalMs 间隔点击 count 次。 */
@@ -35,6 +50,7 @@ data class RepeatClickAction(
     val intervalMs: Long = 50,
     val count: Int = 10,
     val durationMs: Long = 40,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 /** 区域随机点击：在矩形区域内取随机点点击（拟人化）。 */
@@ -43,6 +59,7 @@ data class RepeatClickAction(
 data class AreaRandomClickAction(
     val rect: PercentRect,
     val durationMs: Long = 60,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 // ---------------- 识别点击类 ----------------
@@ -67,8 +84,8 @@ data class ClickImageAction(
     val templateId: String,
     val similarity: Float = 0.85f,
     val region: PercentRect? = null,
-    /** 命中点附近的随机偏移（像素），用于防检测。 */
-    val randomOffset: Int = 0,
+    /** 命中点偏移（固定平移 + 随机抖动），用于校准与防检测。 */
+    val offset: ActionOffset = ActionOffset(),
     /** 检测次数（失败按 intervalMs 重试）。 */
     val detectCount: Int = 1,
     val detectIntervalMs: Long = 500,
@@ -82,7 +99,7 @@ data class ClickColorAction(
     val color: Int,
     val tolerance: Int = 12,
     val region: PercentRect = PercentRect.FULL,
-    val randomOffset: Int = 0,
+    val offset: ActionOffset = ActionOffset(),
     val detectCount: Int = 1,
     val detectIntervalMs: Long = 500,
 ) : Action
@@ -94,6 +111,7 @@ data class ClickTextAction(
     val text: String,
     val useRegex: Boolean = false,
     val region: PercentRect? = null,
+    val offset: ActionOffset = ActionOffset(),
     val detectCount: Int = 1,
     val detectIntervalMs: Long = 500,
 ) : Action
@@ -103,6 +121,7 @@ data class ClickTextAction(
 @SerialName("clickNode")
 data class ClickNodeAction(
     val selector: NodeSelector,
+    val offset: ActionOffset = ActionOffset(),
     val detectCount: Int = 1,
     val detectIntervalMs: Long = 500,
 ) : Action
@@ -121,6 +140,7 @@ data class GestureStroke(
 @SerialName("gesture")
 data class GestureAction(
     val strokes: List<GestureStroke>,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 /** 定长滑动。 */
@@ -130,6 +150,7 @@ data class SwipeAction(
     val from: PercentPoint,
     val to: PercentPoint,
     val durationMs: Long = 300,
+    val offset: ActionOffset = ActionOffset(),
 ) : Action
 
 // ---------------- 手机控制（全局键） ----------------
@@ -297,3 +318,36 @@ data class PopupAction(
 @Serializable
 @SerialName("speak")
 data class SpeakAction(val message: String) : Action
+
+// ---------------- 偏移量辅助 ----------------
+
+/** 读取动作的偏移量；不带坐标的动作返回 null。 */
+val Action.offsetOrNull: ActionOffset?
+    get() = when (this) {
+        is ClickAction -> offset
+        is LongPressAction -> offset
+        is RepeatClickAction -> offset
+        is AreaRandomClickAction -> offset
+        is ClickImageAction -> offset
+        is ClickColorAction -> offset
+        is ClickTextAction -> offset
+        is ClickNodeAction -> offset
+        is SwipeAction -> offset
+        is GestureAction -> offset
+        else -> null
+    }
+
+/** 写回偏移量；不带坐标的动作原样返回。 */
+fun Action.withOffset(value: ActionOffset): Action = when (this) {
+    is ClickAction -> copy(offset = value)
+    is LongPressAction -> copy(offset = value)
+    is RepeatClickAction -> copy(offset = value)
+    is AreaRandomClickAction -> copy(offset = value)
+    is ClickImageAction -> copy(offset = value)
+    is ClickColorAction -> copy(offset = value)
+    is ClickTextAction -> copy(offset = value)
+    is ClickNodeAction -> copy(offset = value)
+    is SwipeAction -> copy(offset = value)
+    is GestureAction -> copy(offset = value)
+    else -> this
+}

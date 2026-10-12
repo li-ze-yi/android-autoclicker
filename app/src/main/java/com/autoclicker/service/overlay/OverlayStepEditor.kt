@@ -24,6 +24,7 @@ import com.autoclicker.core.bus.RecordingSession
 import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.domain.model.Action
+import com.autoclicker.domain.model.ActionOffset
 import com.autoclicker.domain.model.AreaRandomClickAction
 import com.autoclicker.domain.model.CallFunctionAction
 import com.autoclicker.domain.model.ClickAction
@@ -60,6 +61,8 @@ import com.autoclicker.domain.model.SwipeAction
 import com.autoclicker.domain.model.TextSource
 import com.autoclicker.domain.model.ToastAction
 import com.autoclicker.domain.model.VariableOpAction
+import com.autoclicker.domain.model.offsetOrNull
+import com.autoclicker.domain.model.withOffset
 import com.autoclicker.di.ServiceLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -318,6 +321,7 @@ object OverlayStepEditor {
         column.addView(numbers)
 
         buildParamRow(step.id)?.let { column.addView(it) }
+        buildOffsetRow(step.id, step.action)?.let { column.addView(it) }
 
         val ops = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         ops.addView(smallButton("上移") {
@@ -415,7 +419,7 @@ object OverlayStepEditor {
 
         fun number(labelText: String, value: Long, apply: (Long) -> Unit) {
             row.addView(fieldLabel(labelText))
-            row.addView(numberField(value, 1f, apply))
+            row.addView(numberField(value, 1f, onValue = apply))
         }
 
         fun text(labelText: String, value: String, apply: (String) -> Unit) {
@@ -573,6 +577,44 @@ object OverlayStepEditor {
             else -> return null
         }
         return row
+    }
+
+    /**
+     * 带坐标动作的偏移量输入行（固定偏移 X/Y + 随机半径，单位像素）。
+     * 不带坐标的动作返回 null（不显示）。
+     */
+    private fun buildOffsetRow(stepId: String, action: Action): View? {
+        val context = appContext ?: return null
+        val offset = action.offsetOrNull ?: return null
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(fieldLabel("偏移X"))
+        row.addView(
+            signedNumberField(offset.dx.toLong(), 1f) { v ->
+                updateOffset(stepId) { it.copy(dx = v.toInt()) }
+            },
+        )
+        row.addView(fieldLabel("偏移Y"))
+        row.addView(
+            signedNumberField(offset.dy.toLong(), 1f) { v ->
+                updateOffset(stepId) { it.copy(dy = v.toInt()) }
+            },
+        )
+        row.addView(fieldLabel("随机"))
+        row.addView(
+            signedNumberField(offset.randomRadius.toLong(), 1f) { v ->
+                updateOffset(stepId) { it.copy(randomRadius = v.toInt().coerceAtLeast(0)) }
+            },
+        )
+        return row
+    }
+
+    private fun updateOffset(stepId: String, transform: (ActionOffset) -> ActionOffset) {
+        val node = RecordingSession.nodes.value.firstOrNull { it.id == stepId } as? StepNode ?: return
+        val current = node.action.offsetOrNull ?: return
+        RecordingSession.updateNode(node.copy(action = node.action.withOffset(transform(current))))
     }
 
     // ---------------- 添加动作 ----------------
@@ -1007,12 +1049,16 @@ object OverlayStepEditor {
         }
 
     /** 数字输入框：**直接输入即生效**（不再用 延时- / 延时+ 按钮）。 */
-    private fun numberField(value: Long, weight: Float, onValue: (Long) -> Unit): EditText =
+    private fun numberField(value: Long, weight: Float, signed: Boolean = false, onValue: (Long) -> Unit): EditText =
         EditText(appContext).apply {
             setText(value.toString())
             textSize = 11f
             setTextColor(Color.WHITE)
-            inputType = InputType.TYPE_CLASS_NUMBER
+            inputType = if (signed) {
+                InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+            } else {
+                InputType.TYPE_CLASS_NUMBER
+            }
             gravity = Gravity.CENTER_VERTICAL
             setSelectAllOnFocus(true)
             setPadding(dp(4), 0, dp(4), 0)
@@ -1031,6 +1077,10 @@ object OverlayStepEditor {
                 },
             )
         }
+
+    /** 可输入负数的偏移量数字框。 */
+    private fun signedNumberField(value: Long, weight: Float, onValue: (Long) -> Unit): EditText =
+        numberField(value, weight, signed = true, onValue = onValue)
 
     private fun textField(value: String, weight: Float, onValue: (String) -> Unit): EditText =
         EditText(appContext).apply {

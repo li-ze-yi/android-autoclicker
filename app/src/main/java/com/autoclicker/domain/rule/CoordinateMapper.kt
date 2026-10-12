@@ -1,5 +1,6 @@
 package com.autoclicker.domain.rule
 
+import com.autoclicker.domain.model.ActionOffset
 import com.autoclicker.domain.model.PercentPoint
 import com.autoclicker.domain.model.PercentRect
 import com.autoclicker.domain.model.PixelPoint
@@ -53,6 +54,15 @@ class CoordinateMapper(
         return PixelPoint(
             (point.x + Random.nextInt(-radius, radius + 1)).coerceIn(0, (screenWidth - 1).coerceAtLeast(0)),
             (point.y + Random.nextInt(-radius, radius + 1)).coerceIn(0, (screenHeight - 1).coerceAtLeast(0)),
+        )
+    }
+
+    /** 先按 [offset] 固定平移，再按随机半径抖动，结果夹取在屏幕内。 */
+    fun applyOffset(point: PixelPoint, offset: ActionOffset): PixelPoint {
+        if (offset.isZero) return point
+        return jitter(
+            PixelPoint(point.x + offset.dx, point.y + offset.dy),
+            offset.randomRadius,
         )
     }
 }

@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.autoclicker.core.permission.PermissionChecker
 import com.autoclicker.domain.model.Action
+import com.autoclicker.domain.model.ActionOffset
 import com.autoclicker.domain.model.AreaRandomClickAction
 import com.autoclicker.domain.model.BoolCombine
 import com.autoclicker.domain.model.CallFunctionAction
@@ -146,6 +147,28 @@ fun ActionFormContent(
     }
 }
 
+/**
+ * 偏移量字段组（固定偏移 X/Y + 随机半径，单位像素）：带坐标动作共用。
+ */
+@Composable
+private fun OffsetFields(offset: ActionOffset, onChange: (ActionOffset) -> Unit) {
+    var dx by remember { mutableStateOf(offset.dx.toString()) }
+    var dy by remember { mutableStateOf(offset.dy.toString()) }
+    var radius by remember { mutableStateOf(offset.randomRadius.toString()) }
+    val emit: () -> Unit = {
+        onChange(
+            ActionOffset(
+                dx = parseInt(dx, offset.dx),
+                dy = parseInt(dy, offset.dy),
+                randomRadius = parseInt(radius, offset.randomRadius).coerceAtLeast(0),
+            ),
+        )
+    }
+    NumberFieldRow("固定偏移 X（像素，可负）", dx) { dx = it; emit() }
+    NumberFieldRow("固定偏移 Y（像素，可负）", dy) { dy = it; emit() }
+    NumberFieldRow("随机半径（像素）", radius) { radius = it; emit() }
+}
+
 // ---------------- 点击类 ----------------
 
 @Composable
@@ -153,16 +176,19 @@ private fun ClickForm(a: ClickAction, onChange: (Action) -> Unit) {
     var x by remember { mutableStateOf(formatPercent(a.point.x)) }
     var y by remember { mutableStateOf(formatPercent(a.point.y)) }
     var dur by remember { mutableStateOf(a.durationMs.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         onChange(
             ClickAction(
                 point = PercentPoint(parsePercent(x, a.point.x), parsePercent(y, a.point.y)),
                 durationMs = parseLong(dur, a.durationMs),
+                offset = offset,
             ),
         )
     }
     PercentPointFields(x, y, { x = it; emit() }, { y = it; emit() })
     NumberFieldRow("按压时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 @Composable
@@ -170,16 +196,19 @@ private fun LongPressForm(a: LongPressAction, onChange: (Action) -> Unit) {
     var x by remember { mutableStateOf(formatPercent(a.point.x)) }
     var y by remember { mutableStateOf(formatPercent(a.point.y)) }
     var dur by remember { mutableStateOf(a.durationMs.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         onChange(
             LongPressAction(
                 point = PercentPoint(parsePercent(x, a.point.x), parsePercent(y, a.point.y)),
                 durationMs = parseLong(dur, a.durationMs),
+                offset = offset,
             ),
         )
     }
     PercentPointFields(x, y, { x = it; emit() }, { y = it; emit() })
     NumberFieldRow("长按时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 @Composable
@@ -189,6 +218,7 @@ private fun RepeatClickForm(a: RepeatClickAction, onChange: (Action) -> Unit) {
     var interval by remember { mutableStateOf(a.intervalMs.toString()) }
     var count by remember { mutableStateOf(a.count.toString()) }
     var dur by remember { mutableStateOf(a.durationMs.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         onChange(
             RepeatClickAction(
@@ -196,6 +226,7 @@ private fun RepeatClickForm(a: RepeatClickAction, onChange: (Action) -> Unit) {
                 intervalMs = parseLong(interval, a.intervalMs),
                 count = parseInt(count, a.count),
                 durationMs = parseLong(dur, a.durationMs),
+                offset = offset,
             ),
         )
     }
@@ -203,6 +234,7 @@ private fun RepeatClickForm(a: RepeatClickAction, onChange: (Action) -> Unit) {
     NumberFieldRow("间隔（ms）", interval) { interval = it; emit() }
     NumberFieldRow("次数", count) { count = it; emit() }
     NumberFieldRow("单次按压时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 @Composable
@@ -212,6 +244,7 @@ private fun AreaRandomForm(a: AreaRandomClickAction, onChange: (Action) -> Unit)
     var r by remember { mutableStateOf(formatPercent(a.rect.r)) }
     var b by remember { mutableStateOf(formatPercent(a.rect.b)) }
     var dur by remember { mutableStateOf(a.durationMs.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         onChange(
             AreaRandomClickAction(
@@ -222,11 +255,13 @@ private fun AreaRandomForm(a: AreaRandomClickAction, onChange: (Action) -> Unit)
                     parsePercent(b, a.rect.b),
                 ),
                 durationMs = parseLong(dur, a.durationMs),
+                offset = offset,
             ),
         )
     }
     PercentRectFields(l, t, r, b, { l = it; emit() }, { t = it; emit() }, { r = it; emit() }, { b = it; emit() })
     NumberFieldRow("按压时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 // ---------------- 识别点击类 ----------------
@@ -240,7 +275,7 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
         templates + extraTemplates.filter { extra -> templates.none { it.id == extra.id } }
     }
     var similarity by remember { mutableStateOf(a.similarity.toString()) }
-    var randomOffset by remember { mutableStateOf(a.randomOffset.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     var regionEnabled by remember { mutableStateOf(a.region != null) }
     var l by remember { mutableStateOf(formatPercent(a.region?.l ?: 0f)) }
     var t by remember { mutableStateOf(formatPercent(a.region?.t ?: 0f)) }
@@ -261,7 +296,7 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
                         parsePercent(b, 1f),
                     )
                 } else null,
-                randomOffset = parseInt(randomOffset, a.randomOffset),
+                offset = offset,
                 detectCount = parseInt(detectCount, a.detectCount),
                 detectIntervalMs = parseLong(detectInterval, a.detectIntervalMs),
             ),
@@ -302,7 +337,7 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
         ) { Text("截图新建模板") }
     }
     NumberFieldRow("相似度（0..1）", similarity) { similarity = it; emit() }
-    NumberFieldRow("随机偏移（像素）", randomOffset) { randomOffset = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
     BoolFieldRow("限定识别区域", regionEnabled) { regionEnabled = it; emit() }
     if (regionEnabled) {
         PercentRectFields(l, t, r, b, { l = it; emit() }, { t = it; emit() }, { r = it; emit() }, { b = it; emit() })
@@ -319,7 +354,7 @@ private fun ClickColorForm(a: ClickColorAction, onChange: (Action) -> Unit) {
     var t by remember { mutableStateOf(formatPercent(a.region.t)) }
     var r by remember { mutableStateOf(formatPercent(a.region.r)) }
     var b by remember { mutableStateOf(formatPercent(a.region.b)) }
-    var randomOffset by remember { mutableStateOf(a.randomOffset.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     var detectCount by remember { mutableStateOf(a.detectCount.toString()) }
     var detectInterval by remember { mutableStateOf(a.detectIntervalMs.toString()) }
     val emit: () -> Unit = {
@@ -333,7 +368,7 @@ private fun ClickColorForm(a: ClickColorAction, onChange: (Action) -> Unit) {
                     parsePercent(r, a.region.r),
                     parsePercent(b, a.region.b),
                 ),
-                randomOffset = parseInt(randomOffset, a.randomOffset),
+                offset = offset,
                 detectCount = parseInt(detectCount, a.detectCount),
                 detectIntervalMs = parseLong(detectInterval, a.detectIntervalMs),
             ),
@@ -342,7 +377,7 @@ private fun ClickColorForm(a: ClickColorAction, onChange: (Action) -> Unit) {
     TextFieldRow("颜色（#RRGGBB）", color) { color = it; emit() }
     NumberFieldRow("容差（0..255）", tolerance) { tolerance = it; emit() }
     PercentRectFields(l, t, r, b, { l = it; emit() }, { t = it; emit() }, { r = it; emit() }, { b = it; emit() })
-    NumberFieldRow("随机偏移（像素）", randomOffset) { randomOffset = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
     NumberFieldRow("检测次数", detectCount) { detectCount = it; emit() }
     NumberFieldRow("检测间隔（ms）", detectInterval) { detectInterval = it; emit() }
 }
@@ -351,6 +386,7 @@ private fun ClickColorForm(a: ClickColorAction, onChange: (Action) -> Unit) {
 private fun ClickTextForm(a: ClickTextAction, onChange: (Action) -> Unit) {
     var text by remember { mutableStateOf(a.text) }
     var useRegex by remember { mutableStateOf(a.useRegex) }
+    var offset by remember { mutableStateOf(a.offset) }
     var detectCount by remember { mutableStateOf(a.detectCount.toString()) }
     var detectInterval by remember { mutableStateOf(a.detectIntervalMs.toString()) }
     val emit: () -> Unit = {
@@ -359,6 +395,7 @@ private fun ClickTextForm(a: ClickTextAction, onChange: (Action) -> Unit) {
                 text = text,
                 useRegex = useRegex,
                 region = a.region,
+                offset = offset,
                 detectCount = parseInt(detectCount, a.detectCount),
                 detectIntervalMs = parseLong(detectInterval, a.detectIntervalMs),
             ),
@@ -366,6 +403,7 @@ private fun ClickTextForm(a: ClickTextAction, onChange: (Action) -> Unit) {
     }
     TextFieldRow("文字", text) { text = it; emit() }
     BoolFieldRow("使用正则", useRegex) { useRegex = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
     NumberFieldRow("检测次数", detectCount) { detectCount = it; emit() }
     NumberFieldRow("检测间隔（ms）", detectInterval) { detectInterval = it; emit() }
 }
@@ -373,18 +411,21 @@ private fun ClickTextForm(a: ClickTextAction, onChange: (Action) -> Unit) {
 @Composable
 private fun ClickNodeForm(a: ClickNodeAction, onChange: (Action) -> Unit) {
     var selector by remember { mutableStateOf(a.selector) }
+    var offset by remember { mutableStateOf(a.offset) }
     var detectCount by remember { mutableStateOf(a.detectCount.toString()) }
     var detectInterval by remember { mutableStateOf(a.detectIntervalMs.toString()) }
     val emit: () -> Unit = {
         onChange(
             ClickNodeAction(
                 selector = selector,
+                offset = offset,
                 detectCount = parseInt(detectCount, a.detectCount),
                 detectIntervalMs = parseLong(detectInterval, a.detectIntervalMs),
             ),
         )
     }
     NodeSelectorForm(selector) { selector = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
     NumberFieldRow("检测次数", detectCount) { detectCount = it; emit() }
     NumberFieldRow("检测间隔（ms）", detectInterval) { detectInterval = it; emit() }
 }
@@ -429,6 +470,7 @@ private fun GestureForm(a: GestureAction, onChange: (Action) -> Unit) {
         )
     }
     var dur by remember { mutableStateOf((first?.durationMs ?: 300L).toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         val parsed = points.split(';')
             .mapNotNull { seg ->
@@ -443,10 +485,11 @@ private fun GestureForm(a: GestureAction, onChange: (Action) -> Unit) {
         } else {
             listOf(GestureStroke(points = parsed, startTimeMs = 0L, durationMs = parseLong(dur, 300L)))
         }
-        onChange(GestureAction(strokes = strokes))
+        onChange(GestureAction(strokes = strokes, offset = offset))
     }
     TextFieldRow("轨迹点（x,y;x,y，单位 %）", points) { points = it; emit() }
     NumberFieldRow("轨迹时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 @Composable
@@ -456,12 +499,14 @@ private fun SwipeForm(a: SwipeAction, onChange: (Action) -> Unit) {
     var tx by remember { mutableStateOf(formatPercent(a.to.x)) }
     var ty by remember { mutableStateOf(formatPercent(a.to.y)) }
     var dur by remember { mutableStateOf(a.durationMs.toString()) }
+    var offset by remember { mutableStateOf(a.offset) }
     val emit: () -> Unit = {
         onChange(
             SwipeAction(
                 from = PercentPoint(parsePercent(fx, a.from.x), parsePercent(fy, a.from.y)),
                 to = PercentPoint(parsePercent(tx, a.to.x), parsePercent(ty, a.to.y)),
                 durationMs = parseLong(dur, a.durationMs),
+                offset = offset,
             ),
         )
     }
@@ -470,6 +515,7 @@ private fun SwipeForm(a: SwipeAction, onChange: (Action) -> Unit) {
     Text("终点", modifier = Modifier.padding(top = 4.dp))
     PercentPointFields(tx, ty, { tx = it; emit() }, { ty = it; emit() })
     NumberFieldRow("时长（ms）", dur) { dur = it; emit() }
+    OffsetFields(offset) { offset = it; emit() }
 }
 
 // ---------------- 手机控制 ----------------
