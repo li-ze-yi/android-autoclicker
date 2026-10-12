@@ -281,8 +281,9 @@ class OverlayService : Service() {
         hideConsole()
         hideFloatingBall()
         hideStatusBar()
-        // 任务编辑器是独立悬浮窗，不随上面几个一起移除，必须显式关闭，否则会残留泄漏。
+        // 任务编辑器与运行期弹窗都是独立悬浮窗，不随上面几个一起移除，必须显式关闭，否则会残留泄漏。
         OverlayStepEditor.close()
+        PopupOverlay.dismiss()
         scope.cancel()
         if (ServiceLocator.overlay === controller) ServiceLocator.overlay = null
         super.onDestroy()

@@ -10,6 +10,7 @@ import com.autoclicker.domain.model.ClickNodeAction
 import com.autoclicker.domain.model.ClickTextAction
 import com.autoclicker.domain.model.CloseAppAction
 import com.autoclicker.domain.model.ConditionAction
+import com.autoclicker.domain.model.CountdownAction
 import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.ExtractContentAction
@@ -90,6 +91,7 @@ val ACTION_CATEGORIES: List<ActionCategory> = listOf(
             ActionEntry("跳转") { JumpAction() },
             ActionEntry("调用函数包") { CallFunctionAction(packageId = "") },
             ActionEntry("延时") { DelayAction() },
+            ActionEntry("倒计时") { CountdownAction() },
             ActionEntry("占位注释") { EmptyAction() },
         ),
     ),
@@ -125,6 +127,7 @@ fun actionSummary(action: Action): String = when (action) {
     is JumpAction -> "跳转"
     is CallFunctionAction -> "调用函数包"
     is DelayAction -> "延时 ${action.ms}ms"
+    is CountdownAction -> "倒计时 ${action.seconds}秒"
     is EmptyAction -> "注释 ${action.note}"
     is ToastAction -> "Toast 提示"
     is PopupAction -> "弹窗提示"
@@ -154,6 +157,7 @@ fun actionTitle(action: Action): String = when (action) {
     is JumpAction -> "跳转"
     is CallFunctionAction -> "调用函数包"
     is DelayAction -> "延时"
+    is CountdownAction -> "倒计时"
     is EmptyAction -> "占位注释"
     is ToastAction -> "Toast 提示"
     is PopupAction -> "弹窗提示"

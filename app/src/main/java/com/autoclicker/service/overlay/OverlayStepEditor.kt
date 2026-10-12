@@ -34,6 +34,7 @@ import com.autoclicker.domain.model.ClickNodeAction
 import com.autoclicker.domain.model.ClickTextAction
 import com.autoclicker.domain.model.CloseAppAction
 import com.autoclicker.domain.model.ConditionAction
+import com.autoclicker.domain.model.CountdownAction
 import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.ExtractContentAction
@@ -494,6 +495,15 @@ object OverlayStepEditor {
                 }
             }
 
+            is CountdownAction -> {
+                number("秒数", action.seconds) { v ->
+                    updateActionTyped<CountdownAction>(stepId) { it.copy(seconds = v.coerceAtLeast(0L)) }
+                }
+                text("变量", action.variableName) { v ->
+                    updateActionTyped<CountdownAction>(stepId) { it.copy(variableName = v.trim()) }
+                }
+            }
+
             is OpenAppAction -> text("包名", action.packageName) { v ->
                 updateActionTyped<OpenAppAction>(stepId) { it.copy(packageName = v) }
             }
@@ -737,6 +747,7 @@ object OverlayStepEditor {
         "条件判断" to { ConditionAction() },
         "跳转" to { JumpAction() },
         "延时" to { DelayAction() },
+        "倒计时" to { CountdownAction() },
         "弹窗提示" to { PopupAction(message = "") },
         "语音播报" to { SpeakAction(message = "") },
         "Toast 提示" to { ToastAction(message = "") },

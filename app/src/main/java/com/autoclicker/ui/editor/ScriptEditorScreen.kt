@@ -905,7 +905,8 @@ private fun StepConfigDialog(
                 ChoiceField("失败跳转", failure, options) { failure = it }
                 Text(
                     if (step.action.hasOutcomeBranch()) {
-                        "识别类动作按「是否找到目标」判定成功/失败，条件判断按条件真假判定。"
+                        "识别类动作按「是否找到目标」判定成功/失败，条件判断按条件真假判定。" +
+                            "想实现「跳过」就填「成功跳转」：指向紧接着的下一步之后某一步即可跳过中间步骤。"
                     } else {
                         "该动作没有识别结果，执行完成即算成功（走「成功跳转」）；" +
                             "只有动作本身失败（如手势/全局能力不可用）才走「失败跳转」。"

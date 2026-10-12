@@ -59,7 +59,8 @@ class ExecutionContext {
             frame.locals[key]?.let { return it }
             frame.params[key]?.let { return it }
         }
-        return global[key]
+        // 用户变量优先；没有同名用户变量时回退到系统内置变量（屏幕宽高、年月日时分秒）。
+        return global[key] ?: BuiltinVars.resolve(key)
     }
 
     fun set(name: String, value: String) {

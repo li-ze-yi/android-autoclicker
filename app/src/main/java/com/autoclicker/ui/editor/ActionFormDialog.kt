@@ -38,6 +38,7 @@ import com.autoclicker.domain.model.CompareOp
 import com.autoclicker.domain.model.ConditionAction
 import com.autoclicker.domain.model.ConditionClause
 import com.autoclicker.domain.model.ConditionType
+import com.autoclicker.domain.model.CountdownAction
 import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.ExtractContentAction
@@ -139,6 +140,7 @@ fun ActionFormContent(
             is JumpAction -> JumpForm(a, steps, onChanged)
             is CallFunctionAction -> CallFunctionForm(a, packages, onChanged)
             is DelayAction -> DelayForm(a, onChanged)
+            is CountdownAction -> CountdownForm(a, onChanged)
             is EmptyAction -> EmptyForm(a, onChanged)
             is ToastAction -> ToastForm(a, onChanged)
             is PopupAction -> PopupForm(a, onChanged)
@@ -147,6 +149,11 @@ fun ActionFormContent(
         }
     }
 }
+
+/** 内置变量提示：与 BuiltinVars 支持的名称保持一致。 */
+private const val BUILTIN_VARS_HINT =
+    "内置变量（可直接填）：screenWidth/screenHeight、year/month/day/hour/minute/second；" +
+        "中文别名 屏幕宽/屏幕高/年/月/日/时/分/秒"
 
 /**
  * 偏移量字段组（固定偏移 X/Y + 随机半径，单位像素）：带坐标动作共用。
@@ -609,6 +616,7 @@ private fun InputTextForm(a: InputTextAction, textGroups: List<TextGroup>, onCha
         TextMode.VARIABLE -> {
             var varName by remember { mutableStateOf(source.variableName) }
             TextFieldRow("变量名", varName) { varName = it; source = source.copy(variableName = it); emit() }
+            Text(BUILTIN_VARS_HINT, style = MaterialTheme.typography.bodySmall)
         }
     }
     BoolFieldRow("输入前清空", clearFirst) { clearFirst = it; emit() }
@@ -669,6 +677,7 @@ private fun VariableOpForm(a: VariableOpAction, onChange: (Action) -> Unit) {
         onChange(VariableOpAction(varName = varName, op = op, operand = LiteralValue(operand)))
     }
     TextFieldRow("变量名", varName) { varName = it; emit() }
+    Text(BUILTIN_VARS_HINT, style = MaterialTheme.typography.bodySmall)
     ChoiceField(
         label = "操作",
         selected = op,
@@ -697,6 +706,11 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
     var detectCount by remember { mutableStateOf(a.detectCount.toString()) }
     var detectInterval by remember { mutableStateOf(a.detectIntervalMs.toString()) }
     var timeout by remember { mutableStateOf(a.timeoutMs.toString()) }
+    var regionEnabled by remember { mutableStateOf(clause.region != null) }
+    var regionL by remember { mutableStateOf(formatPercent(clause.region?.l ?: 0f)) }
+    var regionT by remember { mutableStateOf(formatPercent(clause.region?.t ?: 0f)) }
+    var regionR by remember { mutableStateOf(formatPercent(clause.region?.r ?: 1f)) }
+    var regionB by remember { mutableStateOf(formatPercent(clause.region?.b ?: 1f)) }
     val emit: () -> Unit = {
         val newClause = clause.copy(
             type = type,
@@ -705,6 +719,15 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
             useRegex = useRegex,
             color = parseColor(color, 0xFFFF0000.toInt()),
             tolerance = parseInt(tolerance, clause.tolerance),
+            // 仅识别类条件（图/文/色）用得上区域；节点/变量条件忽略它。
+            region = if (regionEnabled && type != ConditionType.NODE && type != ConditionType.VARIABLE) {
+                PercentRect(
+                    parsePercent(regionL, 0f),
+                    parsePercent(regionT, 0f),
+                    parsePercent(regionR, 1f),
+                    parsePercent(regionB, 1f),
+                )
+            } else null,
             nodeSelector = nodeSelector,
             varName = varName.ifBlank { null },
             op = op,
@@ -753,6 +776,21 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
                 options = CompareOp.entries.map { it to it.name },
             ) { o -> op = o; emit() }
             TextFieldRow("比较值", compareTo) { compareTo = it; emit() }
+        }
+    }
+    if (type == ConditionType.IMAGE || type == ConditionType.TEXT || type == ConditionType.COLOR) {
+        BoolFieldRow("限定识别区域", regionEnabled) { regionEnabled = it; emit() }
+        if (regionEnabled) {
+            PercentRectFields(
+                regionL,
+                regionT,
+                regionR,
+                regionB,
+                { regionL = it; emit() },
+                { regionT = it; emit() },
+                { regionR = it; emit() },
+                { regionB = it; emit() },
+            )
         }
     }
     BoolFieldRow("取反（不满足才通过）", negate) { negate = it; emit() }
@@ -808,6 +846,22 @@ private fun DelayForm(a: DelayAction, onChange: (Action) -> Unit) {
     }
     NumberFieldRow("延时（ms）", ms) { ms = it; emit() }
     NumberFieldRow("随机追加（ms）", randomMs) { randomMs = it; emit() }
+}
+
+@Composable
+private fun CountdownForm(a: CountdownAction, onChange: (Action) -> Unit) {
+    var seconds by remember { mutableStateOf(a.seconds.toString()) }
+    var variableName by remember { mutableStateOf(a.variableName) }
+    val emit: () -> Unit = {
+        onChange(
+            CountdownAction(
+                seconds = parseLong(seconds, a.seconds).coerceAtLeast(0),
+                variableName = variableName.trim(),
+            ),
+        )
+    }
+    NumberFieldRow("倒计时（秒）", seconds) { seconds = it; emit() }
+    TextFieldRow("用变量指定秒数（可空，优先于上面的值）", variableName) { variableName = it; emit() }
 }
 
 @Composable

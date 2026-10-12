@@ -297,6 +297,17 @@ data class DelayAction(
     val randomMs: Long = 0,
 ) : Action
 
+/**
+ * 倒计时等待：按秒倒数并在日志里输出剩余时间，可被暂停/停止打断。
+ * [variableName] 非空且能取到有效数字时，优先用它作为秒数（便于配合时间/变量计算）。
+ */
+@Serializable
+@SerialName("countdown")
+data class CountdownAction(
+    val seconds: Long = 5,
+    val variableName: String = "",
+) : Action
+
 /** 占位/注释节点。 */
 @Serializable
 @SerialName("empty")

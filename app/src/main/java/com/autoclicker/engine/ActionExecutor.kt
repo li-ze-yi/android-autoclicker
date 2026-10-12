@@ -21,6 +21,7 @@ import com.autoclicker.domain.model.ClickNodeAction
 import com.autoclicker.domain.model.ClickTextAction
 import com.autoclicker.domain.model.CloseAppAction
 import com.autoclicker.domain.model.ConditionAction
+import com.autoclicker.domain.model.CountdownAction
 import com.autoclicker.domain.model.DelayAction
 import com.autoclicker.domain.model.EmptyAction
 import com.autoclicker.domain.model.ExtractContentAction
@@ -54,6 +55,7 @@ import com.autoclicker.domain.model.VariableOpAction
 import com.autoclicker.domain.rule.CoordinateMapper
 import com.autoclicker.platform.PixelStroke
 import com.autoclicker.platform.ScreenFrame
+import com.autoclicker.service.overlay.PopupOverlay
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -244,6 +246,19 @@ class ActionExecutor(
                 StepOutcome(success = true)
             }
 
+            is CountdownAction -> {
+                val total = resolveCountdownSeconds(action, ctx)
+                RuntimeBus.log("倒计时开始：$total 秒")
+                var left = total
+                while (left > 0) {
+                    gate.delay(1000)
+                    left--
+                    if (left > 0) RuntimeBus.log("倒计时：还剩 $left 秒")
+                }
+                RuntimeBus.log("倒计时结束")
+                StepOutcome(success = true)
+            }
+
             is EmptyAction -> {
                 if (action.note.isNotBlank()) RuntimeBus.log("注释：${action.note}")
                 StepOutcome(success = true)
@@ -256,8 +271,8 @@ class ActionExecutor(
             }
 
             is PopupAction -> {
-                RuntimeBus.log("弹窗提示：${action.title}｜${action.message}（以 Toast 兜底展示）")
-                showToast("${action.title}：${action.message}")
+                RuntimeBus.log("弹窗提示：${action.title}｜${action.message}")
+                PopupOverlay.show(appContext, action.title, action.message)
                 StepOutcome(success = true)
             }
 
@@ -404,7 +419,7 @@ class ActionExecutor(
 
     // ---------------- 内容处理 ----------------
 
-    /** 注入文字；返回是否真的写入成功（当前契约未提供写入口，故一律返回 false）。 */
+    /** 注入文字；返回是否真的写入成功（找不到可输入控件或系统拒绝写入时返回 false）。 */
     private suspend fun inputText(action: InputTextAction, ctx: ExecutionContext): Boolean {
         val text = resolveTextSource(action.source, ctx)
         RuntimeBus.log("输入文字：\"$text\"（清空后输入=${action.clearFirst}）")
@@ -413,15 +428,21 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "无障碍节点能力不可用，无法注入文本：\"$text\"")
             return false
         }
-        val editors = locator.findNodes(NodeSelector(className = "android.widget.EditText"))
-        if (editors.isEmpty()) {
-            RuntimeBus.log(LogLevel.WARN, "未找到可输入控件，文本未注入：\"$text\"")
-        } else {
-            // 当前 NodeLocator 契约未暴露 ACTION_SET_TEXT 接口，P0 仅记录待注入文本。
-            RuntimeBus.log(LogLevel.WARN, "文本注入需无障碍 ACTION_SET_TEXT 接口，当前契约未提供：\"$text\"")
+        val ok = try {
+            locator.setText(INPUT_TEXT_SELECTOR, text, action.clearFirst)
+        } catch (t: Throwable) {
+            RuntimeBus.log(LogLevel.WARN, "文本注入异常：${t.message}")
+            false
         }
-        // 没有真正写入就不能算成功，否则会误走「成功跳转」。
-        return false
+        if (ok) {
+            RuntimeBus.log("文本已写入：\"$text\"")
+        } else {
+            RuntimeBus.log(
+                LogLevel.WARN,
+                "文本未注入：当前界面没有可输入控件，或控件拒绝 ACTION_SET_TEXT：\"$text\"",
+            )
+        }
+        return ok
     }
 
     private suspend fun extractContent(action: ExtractContentAction, ctx: ExecutionContext) {
@@ -542,6 +563,14 @@ class ActionExecutor(
     }
 
     // ---------------- 全局键 / 提示 ----------------
+
+    /** 倒计时秒数：变量优先（能解析出非负整数时），否则用动作上的字面量。 */
+    private fun resolveCountdownSeconds(action: CountdownAction, ctx: ExecutionContext): Long {
+        val fromVar = action.variableName
+            .takeIf { it.isNotBlank() }
+            ?.let { ctx.get(it)?.trim()?.toLongOrNull() }
+        return (fromVar ?: action.seconds).coerceAtLeast(0L)
+    }
 
     /** 执行全局键；返回是否真的派发成功（能力缺失时返回 false，避免静默走成功分支）。 */
     private fun execGlobalKey(action: GlobalKeyAction): Boolean {
@@ -701,4 +730,9 @@ class ActionExecutor(
     }
 
     private fun randomExtra(range: Long): Long = if (range <= 0) 0L else Random.nextLong(0, range + 1)
+
+    companion object {
+        /** 「输入文字」的首选目标（EditText）；无障碍层找不到时会回退到已聚焦的可编辑控件。 */
+        private val INPUT_TEXT_SELECTOR = NodeSelector(className = "android.widget.EditText")
+    }
 }

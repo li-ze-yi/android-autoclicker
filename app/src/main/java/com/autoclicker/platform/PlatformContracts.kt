@@ -80,6 +80,16 @@ interface NodeLocator {
 
     /** 读取屏幕上的全部文本（用于「点击文字」与内容提取）。 */
     suspend fun readAllText(): List<NodeInfo>
+
+    /**
+     * 向匹配 [selector] 的输入控件写入文本（无障碍 ACTION_SET_TEXT）。
+     * [clearFirst] 为 true 时先清空原有内容。写入成功返回 true。
+     */
+    suspend fun setText(
+        selector: com.autoclicker.domain.model.NodeSelector,
+        text: String,
+        clearFirst: Boolean,
+    ): Boolean
 }
 
 /** OCR 识别结果项。 */
