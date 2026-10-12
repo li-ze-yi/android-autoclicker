@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.concurrent.atomic.AtomicLong
 
 /** 播放状态。 */
 enum class PlaybackState { IDLE, RUNNING, PAUSED, STOPPED, ERROR }
@@ -51,10 +52,10 @@ object RuntimeBus {
     private val _currentStep = MutableStateFlow<StepExecutionInfo?>(null)
     val currentStep: StateFlow<StepExecutionInfo?> = _currentStep.asStateFlow()
 
-    private var counter = 0L
+    private var counter = AtomicLong(0L)
 
     fun log(level: LogLevel, message: String) {
-        val entry = LogEntry(++counter, System.currentTimeMillis(), level, message)
+        val entry = LogEntry(counter.incrementAndGet(), System.currentTimeMillis(), level, message)
         _logs.update { current ->
             val next = current + entry
             if (next.size > MAX_LOGS) next.takeLast(MAX_LOGS) else next

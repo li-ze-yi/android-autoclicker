@@ -27,9 +27,10 @@ internal class JsonDirStore(
     fun write(id: String, content: String) {
         ensureDir()
         val target = fileFor(id)
-        val tmp = File(dir, "$id.json.tmp")
+        // 临时名必须唯一：同一 id 被编辑器与录制自动保存并发写入时，固定名会互相覆盖导致内容截断。
+        val tmp = File(dir, "$id.${System.nanoTime()}.tmp")
         tmp.writeText(content, StandardCharsets.UTF_8)
-        if (target.exists()) target.delete()
+        // Linux 上 rename 会原子替换目标，不能先 delete——那会留下「文件不存在」的窗口。
         if (!tmp.renameTo(target)) {
             target.writeText(content, StandardCharsets.UTF_8)
             tmp.delete()

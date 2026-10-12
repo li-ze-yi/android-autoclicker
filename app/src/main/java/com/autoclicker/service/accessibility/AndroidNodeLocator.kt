@@ -3,6 +3,8 @@ package com.autoclicker.service.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import com.autoclicker.core.bus.LogLevel
+import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.domain.model.NodeSelector
 import com.autoclicker.domain.model.PixelRect
 import com.autoclicker.platform.NodeInfo
@@ -19,20 +21,17 @@ class AndroidNodeLocator(
     override fun isReady(): Boolean = serviceProvider() != null
 
     override suspend fun findNodes(selector: NodeSelector): List<NodeInfo> {
-        val matched = collectNodes { matches(it, selector) }
-        val withBounds = matched.map { it to boundsOf(it) }
-        val ordered = withBounds.sortedWith(
-            compareByDescending<Pair<AccessibilityNodeInfo, Rect>> { it.first.isClickable }
-                .thenBy { it.second.width() * it.second.height() }
-                .thenBy { it.second.top },
+        val matched = collectInfos { matches(it, selector) }
+        // 排序依据全部来自 NodeInfo，遍历结束后不再持有任何无障碍节点对象。
+        return matched.sortedWith(
+            compareByDescending<NodeInfo> { it.clickable }
+                .thenBy { it.bounds.width * it.bounds.height }
+                .thenBy { it.bounds.t },
         )
-        return ordered.map { toInfo(it.first, it.second) }
     }
 
-    override suspend fun readAllText(): List<NodeInfo> {
-        val matched = collectNodes { !it.text.isNullOrBlank() }
-        return matched.map { toInfo(it, boundsOf(it)) }
-    }
+    override suspend fun readAllText(): List<NodeInfo> =
+        collectInfos { !it.text.isNullOrBlank() }
 
     private fun matches(node: AccessibilityNodeInfo, selector: NodeSelector): Boolean {
         if (selector.clickableOnly && !node.isClickable) return false
@@ -65,9 +64,13 @@ class AndroidNodeLocator(
         return true
     }
 
-    private fun collectNodes(predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
+    /**
+     * 广度优先遍历控件树，命中项**当场转成轻量 [NodeInfo]**。
+     * 不保留 [AccessibilityNodeInfo] 引用，避免复杂界面下同时驻留数千个节点对象抬高堆占用。
+     */
+    private fun collectInfos(predicate: (AccessibilityNodeInfo) -> Boolean): List<NodeInfo> {
         val service = serviceProvider() ?: return emptyList()
-        val result = ArrayList<AccessibilityNodeInfo>()
+        val result = ArrayList<NodeInfo>()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         val roots = LinkedHashSet<AccessibilityNodeInfo>()
         try {
@@ -79,10 +82,14 @@ class AndroidNodeLocator(
         queue.addAll(roots)
 
         var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES) {
+        while (queue.isNotEmpty()) {
+            if (visited >= MAX_NODES) {
+                RuntimeBus.log(LogLevel.WARN, "控件树节点超过 $MAX_NODES，本次遍历已截断")
+                break
+            }
             val node = queue.removeFirst()
             visited++
-            if (predicate(node)) result.add(node)
+            if (predicate(node)) result.add(toInfo(node, boundsOf(node)))
             val childCount = node.childCount
             for (i in 0 until childCount) {
                 node.getChild(i)?.let { queue.add(it) }

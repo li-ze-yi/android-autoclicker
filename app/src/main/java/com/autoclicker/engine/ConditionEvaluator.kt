@@ -73,11 +73,15 @@ class ConditionEvaluator(private val gate: PauseGate) {
     private suspend fun evalImage(clause: ConditionClause): Boolean {
         val id = clause.templateId ?: return false
         val frame = captureFrame() ?: return false
-        val finder = Platform.images() ?: return false
+        val finder = Platform.images() ?: run { frame.recycle(); return false }
         // 识别区域优先级：条件子句 region > 模板默认 region > 全屏。
         val effectiveRegion = clause.region ?: ServiceLocator.templates.get(id)?.region
-        val region = effectiveRegion?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
-        return finder.find(id, clause.similarity, region, frame) != null
+        return try {
+            val region = effectiveRegion?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
+            finder.find(id, clause.similarity, region, frame) != null
+        } finally {
+            frame.recycle()
+        }
     }
 
     private suspend fun evalText(clause: ConditionClause, mapper: () -> CoordinateMapper): Boolean {
@@ -100,9 +104,13 @@ class ConditionEvaluator(private val gate: PauseGate) {
     private suspend fun evalColor(clause: ConditionClause): Boolean {
         val color = clause.color ?: return false
         val frame = captureFrame() ?: return false
-        val finder = Platform.colors() ?: return false
-        val region = CoordinateMapper(frame.width, frame.height).toPixel(clause.region ?: PercentRect.FULL)
-        return finder.find(color, clause.tolerance, region, frame) != null
+        val finder = Platform.colors() ?: run { frame.recycle(); return false }
+        return try {
+            val region = CoordinateMapper(frame.width, frame.height).toPixel(clause.region ?: PercentRect.FULL)
+            finder.find(color, clause.tolerance, region, frame) != null
+        } finally {
+            frame.recycle()
+        }
     }
 
     private suspend fun evalNode(clause: ConditionClause): Boolean {

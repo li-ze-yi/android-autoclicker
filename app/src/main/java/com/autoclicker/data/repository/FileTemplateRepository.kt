@@ -2,6 +2,8 @@ package com.autoclicker.data.repository
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.autoclicker.core.bus.LogLevel
+import com.autoclicker.core.bus.RuntimeBus
 import com.autoclicker.domain.codec.DomainJson
 import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.ImageTemplate
@@ -23,14 +25,32 @@ class FileTemplateRepository(baseDir: File) : TemplateRepository {
 
     private fun readIndex(): List<ImageTemplate> {
         if (!indexFile.isFile) return emptyList()
-        return runCatching {
-            DomainJson.instance.decodeFromString(listSerializer, indexFile.readText())
-        }.getOrDefault(emptyList())
+        val text = indexFile.readText()
+        return try {
+            DomainJson.instance.decodeFromString(listSerializer, text)
+        } catch (e: Exception) {
+            // 不能静默返回空：后续任何一次保存都会以「空 + 新模板」写回，把全部模板元数据抹掉。
+            // 这里先把损坏文件改名备份并明确报错，用户至少还能从备份里找回内容。
+            val backup = File(dir, "index.corrupt-${System.currentTimeMillis()}.json")
+            val backedUp = runCatching { indexFile.renameTo(backup) }.getOrDefault(false)
+            RuntimeBus.log(
+                LogLevel.ERROR,
+                "模板索引解析失败：${e.message}；" +
+                    if (backedUp) "已备份为 ${backup.name}" else "备份失败，请勿在此状态下继续保存模板",
+            )
+            emptyList()
+        }
     }
 
     private fun writeIndex(list: List<ImageTemplate>) {
         if (!dir.exists()) dir.mkdirs()
-        indexFile.writeText(DomainJson.instance.encodeToString(listSerializer, list))
+        // 临时文件 + 原子替换：直接覆盖写在中途崩溃时会把索引写坏。
+        val tmp = File(dir, "index.${System.nanoTime()}.tmp")
+        tmp.writeText(DomainJson.instance.encodeToString(listSerializer, list))
+        if (!tmp.renameTo(indexFile)) {
+            indexFile.writeText(DomainJson.instance.encodeToString(listSerializer, list))
+            tmp.delete()
+        }
     }
 
     override suspend fun list(): List<ImageTemplate> = withContext(Dispatchers.IO) {

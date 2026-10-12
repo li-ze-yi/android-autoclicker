@@ -11,6 +11,7 @@ import com.autoclicker.domain.model.LaunchType
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.StepNode
 import com.autoclicker.platform.PlaybackController
+import com.autoclicker.service.runtime.PlaybackForegroundService
 import com.autoclicker.ui.editor.actionSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +62,10 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
         RuntimeBus.clearLogs()
         RuntimeBus.setCurrentStep(null)
         paused.value = false
+        // 播放期间用前台服务保活并展示常驻通知，否则退到后台容易被系统回收。
+        // 先于 RUNNING 状态启动：服务靠订阅状态自行判断何时 stopSelf。
+        runCatching { PlaybackForegroundService.start(appContext) }
+            .onFailure { RuntimeBus.log(LogLevel.WARN, "启动播放前台服务失败：${it.message}") }
         RuntimeBus.setState(PlaybackState.RUNNING)
         val knownScripts = runCatching { scripts.list().size }.getOrDefault(0)
         RuntimeBus.log(LogLevel.INFO, "开始运行：${script.name}（共 ${script.actionCount} 个动作 / 已存 $knownScripts 个任务）")
@@ -104,13 +109,14 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
     override fun stop() {
         paused.value = false
         val current = job
-        job = null
         if (current != null && current.isActive) {
             current.cancel()
             RuntimeBus.setCurrentStep(null)
             RuntimeBus.setState(PlaybackState.STOPPED)
             RuntimeBus.log(LogLevel.INFO, "已停止运行")
         }
+        // 不在这里清空 job：play() 需要 join 到旧协程真正退出，
+        // 否则取消（协作式）还没生效时新旧两个解释器会并发派发手势。
     }
 
     // ---------------- 内部执行 ----------------

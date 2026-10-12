@@ -171,8 +171,7 @@ class ActionExecutor(
 
             is GlobalKeyAction -> {
                 RuntimeBus.log("全局键 ${action.key}")
-                execGlobalKey(action)
-                StepOutcome(success = true)
+                StepOutcome(success = execGlobalKey(action))
             }
 
             is OpenAppAction -> {
@@ -197,10 +196,7 @@ class ActionExecutor(
                 StepOutcome(success = true)
             }
 
-            is InputTextAction -> {
-                inputText(action, ctx)
-                StepOutcome(success = true)
-            }
+            is InputTextAction -> StepOutcome(success = inputText(action, ctx))
 
             is ExtractContentAction -> {
                 extractContent(action, ctx)
@@ -304,9 +300,13 @@ class ActionExecutor(
         val effectiveRegion = action.region ?: templates.get(action.templateId)?.region
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrame() ?: return@retryDetect null
-            val frameMapper = CoordinateMapper(frame.width, frame.height)
-            val region = effectiveRegion?.let { frameMapper.toPixel(it) }
-            finder.find(action.templateId, action.similarity, region, frame)
+            try {
+                val frameMapper = CoordinateMapper(frame.width, frame.height)
+                val region = effectiveRegion?.let { frameMapper.toPixel(it) }
+                finder.find(action.templateId, action.similarity, region, frame)
+            } finally {
+                frame.recycle()
+            }
         }
         val name = templateName(action.templateId)
         // 带上相似度：能区分「画面里确实还有目标」（分数远高于阈值）和「擦边误判」（贴着阈值）。
@@ -332,8 +332,12 @@ class ActionExecutor(
         }
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrame() ?: return@retryDetect null
-            val frameMapper = CoordinateMapper(frame.width, frame.height)
-            finder.find(action.color, action.tolerance, frameMapper.toPixel(action.region), frame)
+            try {
+                val frameMapper = CoordinateMapper(frame.width, frame.height)
+                finder.find(action.color, action.tolerance, frameMapper.toPixel(action.region), frame)
+            } finally {
+                frame.recycle()
+            }
         }
         if (hit == null) {
             RuntimeBus.log(LogLevel.WARN, "未找到目标颜色：${Integer.toHexString(action.color)}")
@@ -400,21 +404,24 @@ class ActionExecutor(
 
     // ---------------- 内容处理 ----------------
 
-    private suspend fun inputText(action: InputTextAction, ctx: ExecutionContext) {
+    /** 注入文字；返回是否真的写入成功（当前契约未提供写入口，故一律返回 false）。 */
+    private suspend fun inputText(action: InputTextAction, ctx: ExecutionContext): Boolean {
         val text = resolveTextSource(action.source, ctx)
         RuntimeBus.log("输入文字：\"$text\"（清空后输入=${action.clearFirst}）")
         val locator = Platform.nodes()
         if (locator == null) {
             RuntimeBus.log(LogLevel.WARN, "无障碍节点能力不可用，无法注入文本：\"$text\"")
-            return
+            return false
         }
         val editors = locator.findNodes(NodeSelector(className = "android.widget.EditText"))
         if (editors.isEmpty()) {
-            RuntimeBus.log(LogLevel.WARN, "未找到可输入控件，跳过文本注入：\"$text\"")
+            RuntimeBus.log(LogLevel.WARN, "未找到可输入控件，文本未注入：\"$text\"")
         } else {
             // 当前 NodeLocator 契约未暴露 ACTION_SET_TEXT 接口，P0 仅记录待注入文本。
-            RuntimeBus.log(LogLevel.WARN, "文本注入需无障碍 ACTION_SET_TEXT 接口，当前契约未提供，已跳过：\"$text\"")
+            RuntimeBus.log(LogLevel.WARN, "文本注入需无障碍 ACTION_SET_TEXT 接口，当前契约未提供：\"$text\"")
         }
+        // 没有真正写入就不能算成功，否则会误走「成功跳转」。
+        return false
     }
 
     private suspend fun extractContent(action: ExtractContentAction, ctx: ExecutionContext) {
@@ -439,9 +446,14 @@ class ActionExecutor(
                 val frame = captureFrame()
                 val ocr = Platform.ocr()
                 if (frame != null && ocr != null) {
-                    val region = action.region?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
-                    text = ocr.recognize(frame, region).joinToString(separator = "") { it.text }
+                    try {
+                        val region = action.region?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
+                        text = ocr.recognize(frame, region).joinToString(separator = "") { it.text }
+                    } finally {
+                        frame.recycle()
+                    }
                 } else {
+                    frame?.recycle()
                     RuntimeBus.log(LogLevel.WARN, "OCR 能力不可用，无法提取内容")
                 }
             }
@@ -531,13 +543,14 @@ class ActionExecutor(
 
     // ---------------- 全局键 / 提示 ----------------
 
-    private fun execGlobalKey(action: GlobalKeyAction) {
+    /** 执行全局键；返回是否真的派发成功（能力缺失时返回 false，避免静默走成功分支）。 */
+    private fun execGlobalKey(action: GlobalKeyAction): Boolean {
         val global = Platform.global()
         if (global == null) {
             RuntimeBus.log(LogLevel.WARN, "全局操作不可用，无法执行 ${action.key}")
-            return
+            return false
         }
-        when (action.key) {
+        return when (action.key) {
             GlobalKeyName.BACK -> global.back()
             GlobalKeyName.HOME -> global.home()
             GlobalKeyName.RECENTS -> global.recents()

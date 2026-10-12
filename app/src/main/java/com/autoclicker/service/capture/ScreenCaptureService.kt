@@ -229,6 +229,7 @@ class MediaProjectionScreenSource(
 
     override suspend fun capture(): ScreenFrame? = withContext(Dispatchers.IO) {
         val image = acquire() ?: return@withContext null
+        var bitmap: Bitmap? = null
         try {
             val plane = image.planes[0]
             val buffer = plane.buffer
@@ -237,17 +238,21 @@ class MediaProjectionScreenSource(
             val rowPadding = rowStride - pixelStride * width
             val rawWidth = (width + rowPadding / pixelStride).coerceAtLeast(width)
 
-            val bitmap = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
+            val full = Bitmap.createBitmap(rawWidth, height, Bitmap.Config.ARGB_8888)
+            bitmap = full
             buffer.rewind()
-            bitmap.copyPixelsFromBuffer(buffer)
+            full.copyPixelsFromBuffer(buffer)
 
             val result = if (rawWidth == width) {
-                bitmap
+                full
             } else {
-                Bitmap.createBitmap(bitmap, 0, 0, width, height).also { bitmap.recycle() }
+                Bitmap.createBitmap(full, 0, 0, width, height).also { full.recycle() }
             }
+            bitmap = result
             ScreenFrame(result, result.width, result.height)
         } catch (t: Throwable) {
+            // 异常路径也要回收已分配的整屏位图，否则会留下未被引用的 native 内存。
+            bitmap?.recycle()
             null
         } finally {
             image.close()

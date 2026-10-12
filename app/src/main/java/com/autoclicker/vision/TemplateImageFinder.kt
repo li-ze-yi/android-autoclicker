@@ -48,21 +48,30 @@ class TemplateImageFinder(
         val sh = bitmap.height
         if (sw <= 0 || sh <= 0) return null
 
+        // 只拷搜索区域内的像素：限定区域时不再为整屏分配 IntArray（1080×2400 约 10MB）。
+        val rl = (region?.l ?: 0).coerceIn(0, sw)
+        val rt = (region?.t ?: 0).coerceIn(0, sh)
+        val rr = (region?.r ?: sw).coerceIn(rl, sw)
+        val rb = (region?.b ?: sh).coerceIn(rt, sh)
+        val cw = rr - rl
+        val ch = rb - rt
+        if (cw < tw || ch < th) return null
+
         val templatePixels = IntArray(tw * th)
         template.getPixels(templatePixels, 0, tw, 0, 0, tw, th)
 
-        val scenePixels = IntArray(sw * sh)
-        bitmap.getPixels(scenePixels, 0, sw, 0, 0, sw, sh)
+        val scenePixels = IntArray(cw * ch)
+        bitmap.getPixels(scenePixels, 0, cw, rl, rt, cw, ch)
 
         return NccMatcher.findBestWithScore(
             template = templatePixels,
             tw = tw,
             th = th,
             scene = scenePixels,
-            sw = sw,
-            sh = sh,
-            region = region,
+            sw = cw,
+            sh = ch,
+            region = null,
             similarity = similarity,
-        ).also { lastScoreValue = it.score }.point
+        ).also { lastScoreValue = it.score }.point?.let { PixelPoint(it.x + rl, it.y + rt) }
     }
 }

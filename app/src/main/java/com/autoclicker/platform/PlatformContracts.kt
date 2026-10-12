@@ -9,7 +9,15 @@ class ScreenFrame(
     val bitmap: Bitmap,
     val width: Int,
     val height: Int,
-)
+) {
+    /**
+     * 释放底层位图。用完必须调用：整屏 ARGB 位图约 10MB（1080×2400），
+     * 识别重试与条件超时循环会反复截屏，不释放会持续堆积大对象直至 OOM。
+     */
+    fun recycle() {
+        if (!bitmap.isRecycled) bitmap.recycle()
+    }
+}
 
 /** 屏幕采集来源：无障碍截屏或 MediaProjection。 */
 interface ScreenSource {
