@@ -645,22 +645,20 @@ class ActionExecutor(
      * 识别重试循环：**每次尝试 = 截一次屏 + 识别一次**，节奏完全由动作自配参数决定。
      *
      * - 尝试次数 [count]（= 检测次数 detectCount）
-     * - 第 2..N 次尝试之间等待 [intervalMs]（= 检测间隔 detectIntervalMs）
-     * - 第 1 次尝试前只等 [SETTLE_BEFORE_DETECT_MS] 让上一步的画面刷新完，避免拿到旧帧
+     * - 第 1 次尝试立即执行，不做额外等待
+     * - 每次尝试失败后等待 [intervalMs]（= 检测间隔 detectIntervalMs）再试下一次
      *
-     * 截屏失败与识别失败一样计入本次尝试失败，不再有额外的截屏重试/冷却，
+     * 截屏失败与识别失败一样计入本次尝试失败，没有再额外的截屏重试或固定缓冲，
      * 以免实际节奏与用户设置的参数不一致。
      */
     private suspend fun <T> retryDetect(count: Int, intervalMs: Long, block: suspend () -> T?): T? {
         val total = count.coerceAtLeast(1)
         var i = 0
         while (i < total) {
-            // 首次识别前先缓冲一下：上一步的点击/滑动生效后屏幕需要时间刷新，
-            // 立即截屏会拿到旧帧，表现为「明明在可识别区域却识别不上」。
-            gate.delay(if (i == 0) SETTLE_BEFORE_DETECT_MS else intervalMs.coerceAtLeast(0))
             val result = block()
             if (result != null) return result
             i++
+            if (i < total) gate.delay(intervalMs.coerceAtLeast(0))
         }
         return null
     }
@@ -690,15 +688,4 @@ class ActionExecutor(
     }
 
     private fun randomExtra(range: Long): Long = if (range <= 0) 0L else Random.nextLong(0, range + 1)
-
-    companion object {
-        /**
-         * 识别类动作首次截屏前的缓冲时长，等屏幕刷新，避免拿到旧帧。
-         * 手势回调（onCompleted）本身就意味着点击/滑动已执行完，加上截屏通道
-         * 自带的 450ms 节流，150ms 足够；再长只会拖慢「连点」的节奏。
-         *
-         * 只作用于**第一次**尝试；第 2..N 次尝试的间隔一律用动作自配的 detectIntervalMs。
-         */
-        private const val SETTLE_BEFORE_DETECT_MS = 150L
-    }
 }
