@@ -36,6 +36,12 @@ object UpdateChecker {
     /** 下载页：始终指向最新 Release，可作为检查失败时的兜底入口。 */
     const val RELEASES_PAGE = "https://github.com/$REPO/releases/latest"
 
+    /**
+     * 最新版 APK 直链：GitHub 的 `releases/latest/download/<资源名>` 会重定向到最新 Release 的该文件，
+     * 用浏览器打开即直接开始下载，无需先查 API。
+     */
+    const val LATEST_APK_URL = "https://github.com/$REPO/releases/latest/download/app-debug.apk"
+
     private const val TIMEOUT_MS = 8000
 
     private val json = Json { ignoreUnknownKeys = true }

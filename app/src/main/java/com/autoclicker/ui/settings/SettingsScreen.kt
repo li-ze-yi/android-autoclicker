@@ -208,6 +208,12 @@ fun SettingsScreen(onOpenPermissions: () -> Unit) {
                         modifier = Modifier.padding(top = 6.dp),
                     )
                 }
+                Button(
+                    onClick = { openUrl(context, UpdateChecker.LATEST_APK_URL) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                ) { Text("直接下载最新版") }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 6.dp),
@@ -221,12 +227,12 @@ fun SettingsScreen(onOpenPermissions: () -> Unit) {
                                 updateMessage = try {
                                     val latest = UpdateChecker.fetchLatest()
                                     if (latest.isNewerThanCurrent) {
-                                        "发现新版本 ${latest.tagName}，点「打开下载页」获取"
+                                        "发现新版本 ${latest.tagName}，点「直接下载最新版」获取"
                                     } else {
                                         "已是最新版本（云端 ${latest.tagName}）"
                                     }
                                 } catch (t: Throwable) {
-                                    "检查失败：${t.message ?: "网络异常"}，可直接点「打开下载页」"
+                                    "检查失败：${t.message ?: "网络异常"}，可直接点「直接下载最新版」"
                                 }
                                 checkingUpdate = false
                             }
