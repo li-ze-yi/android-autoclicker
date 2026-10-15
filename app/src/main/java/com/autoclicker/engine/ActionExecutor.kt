@@ -69,6 +69,8 @@ class ActionExecutor(
     private val appContext: Context,
     private val gate: PauseGate,
     private val conditionEvaluator: ConditionEvaluator,
+    /** 模板组识别顺序学习器：与条件求值器共享同一份，命中达到阈值时把该模板提升到组内首位。 */
+    private val groupOrder: GroupOrderLearner,
     private val invokeFunction: suspend (CallFunctionAction, ExecutionContext) -> Unit,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -314,7 +316,9 @@ class ActionExecutor(
         }
         // 模板组模式：组内多个模板任一命中即算成功（按组内顺序先命中先停）。groupId 为空走单模板，行为不变。
         val group = action.groupId.takeIf { it.isNotBlank() }?.let { templateGroups.get(it) }
-        val targetIds = group?.memberIds ?: listOf(action.templateId).filter { it.isNotBlank() }
+        // 组模式用「学习后的顺序」：老是命中的模板会被提前，省掉它前面模板的扫描。
+        val targetIds = group?.let { groupOrder.orderFor(it.id, it.memberIds) }
+            ?: listOf(action.templateId).filter { it.isNotBlank() }
         if (targetIds.isEmpty()) {
             RuntimeBus.log(LogLevel.WARN, "点击图片未配置模板或模板组（组内也没有成员）")
             return StepOutcome(success = false)
@@ -363,12 +367,17 @@ class ActionExecutor(
             }
             return StepOutcome(success = false)
         }
+        // 记录命中：组内某模板累计命中达阈值时会被提升到组内首位，下次优先尝试它。
+        val hitId = hitTemplateId
+        val hitName = hitId?.let { templateName(it) }
+        if (group != null && hitId != null) {
+            groupOrder.onHit(group.id, group.name, hitId, hitName ?: hitId)
+        }
         val point = mapper().applyOffset(hit, action.offset)
         val regionSuffix = if (effectiveRegion != null) "，区域 ${regionText(effectiveRegion)}" else ""
         if (group != null) {
-            val hitName = hitTemplateId?.let { templateName(it) } ?: action.templateId
             RuntimeBus.log(
-                "识别到模板组「${group.name}」（命中模板「$hitName」）$scoreText，" +
+                "识别到模板组「${group.name}」（命中模板「${hitName ?: action.templateId}」）$scoreText，" +
                     "点击 (${point.x}, ${point.y})$regionSuffix",
             )
         } else {

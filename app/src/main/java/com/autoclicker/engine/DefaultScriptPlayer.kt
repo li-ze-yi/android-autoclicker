@@ -46,7 +46,15 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
         override suspend fun delay(ms: Long) = this@DefaultScriptPlayer.pausableDelay(ms)
     }
 
-    private val executor = ActionExecutor(appContext, gate, ConditionEvaluator(gate)) { action, ctx ->
+    /** 模板组识别顺序学习器：动作执行器与条件求值器共享同一份（按组共享），每次开始任务即清空。 */
+    private val groupOrder = GroupOrderLearner()
+
+    private val executor = ActionExecutor(
+        appContext = appContext,
+        gate = gate,
+        conditionEvaluator = ConditionEvaluator(gate, groupOrder),
+        groupOrder = groupOrder,
+    ) { action, ctx ->
         invokeFunction(action, ctx)
     }
 
@@ -61,6 +69,8 @@ class DefaultScriptPlayer(context: Context) : PlaybackController {
         job?.join()
         RuntimeBus.clearLogs()
         RuntimeBus.setCurrentStep(null)
+        // 每次开始任务都清空模板组的学习顺序，从用户配置的顺序起步。
+        groupOrder.reset()
         paused.value = false
         // 播放期间用前台服务保活并展示常驻通知，否则退到后台容易被系统回收。
         // 先于 RUNNING 状态启动：服务靠订阅状态自行判断何时 stopSelf。

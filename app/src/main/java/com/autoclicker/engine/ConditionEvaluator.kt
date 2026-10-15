@@ -15,7 +15,11 @@ import com.autoclicker.platform.ScreenFrame
  * 条件求值器：[ConditionAction] 的 clauses（IMAGE/TEXT/COLOR/NODE/VARIABLE）
  * 按 [BoolCombine] 组合，并处理各子句的 negate 与整体重试/超时。
  */
-class ConditionEvaluator(private val gate: PauseGate) {
+class ConditionEvaluator(
+    private val gate: PauseGate,
+    /** 模板组识别顺序学习器：与动作执行器共享同一份，命中达到阈值时把该模板提升到组内首位。 */
+    private val groupOrder: GroupOrderLearner,
+) {
 
     suspend fun evaluate(
         action: ConditionAction,
@@ -85,8 +89,19 @@ class ConditionEvaluator(private val gate: PauseGate) {
         return try {
             val region = effectiveRegion?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
             if (group != null) {
+                // 组模式用「学习后的顺序」：老是命中的模板会被提前，省掉它前面模板的扫描。
+                val ids = groupOrder.orderFor(group.id, group.memberIds)
                 // 这里传的 region 即「条件限定区域」：非空时覆盖全体成员，空则各成员用自己的模板区域。
-                finder.findFirst(group.memberIds, clause.similarity, region, frame) != null
+                val hitId = finder.findFirst(ids, clause.similarity, region, frame)?.first
+                if (hitId != null) {
+                    groupOrder.onHit(
+                        group.id,
+                        group.name,
+                        hitId,
+                        ServiceLocator.templates.get(hitId)?.name ?: hitId,
+                    )
+                }
+                hitId != null
             } else {
                 finder.find(singleId!!, clause.similarity, region, frame) != null
             }
