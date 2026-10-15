@@ -40,22 +40,39 @@ class TemplateImageFinder(
         }
         val tw = template.width
         val th = template.height
-        if (tw <= 0 || th <= 0) return null
+        if (tw <= 0 || th <= 0) {
+            lastScoreValue = INVALID_SEARCH_SCORE
+            return null
+        }
 
         // 以 Bitmap 实际尺寸为准，避免与 frame.width/height 不一致导致数组越界
         val bitmap = frame.bitmap
         val sw = bitmap.width
         val sh = bitmap.height
-        if (sw <= 0 || sh <= 0) return null
+        if (sw <= 0 || sh <= 0) {
+            lastScoreValue = INVALID_SEARCH_SCORE
+            return null
+        }
 
         // 只拷搜索区域内的像素：限定区域时不再为整屏分配 IntArray（1080×2400 约 10MB）。
-        val rl = (region?.l ?: 0).coerceIn(0, sw)
-        val rt = (region?.t ?: 0).coerceIn(0, sh)
+        var rl = (region?.l ?: 0).coerceIn(0, sw)
+        var rt = (region?.t ?: 0).coerceIn(0, sh)
         val rr = (region?.r ?: sw).coerceIn(rl, sw)
         val rb = (region?.b ?: sh).coerceIn(rt, sh)
-        val cw = rr - rl
-        val ch = rb - rt
-        if (cw < tw || ch < th) return null
+        var cw = rr - rl
+        var ch = rb - rt
+        if (cw < tw || ch < th) {
+            // 区域比模板还小，这个区域里永远放不下模板，继续搜只会一直失败。
+            // 直接失败会让「限定区域」配置不当表现为「识别永久失效」，故忽略区域改为全屏并明确告警。
+            RuntimeBus.log(
+                LogLevel.WARN,
+                "识别区域 ${cw}x${ch} 小于模板 ${tw}x${th}，已忽略该区域改为全屏识别",
+            )
+            rl = 0
+            rt = 0
+            cw = sw
+            ch = sh
+        }
 
         val templatePixels = IntArray(tw * th)
         template.getPixels(templatePixels, 0, tw, 0, 0, tw, th)
@@ -73,5 +90,13 @@ class TemplateImageFinder(
             region = null,
             similarity = similarity,
         ).also { lastScoreValue = it.score }.point?.let { PixelPoint(it.x + rl, it.y + rt) }
+    }
+
+    private companion object {
+        /**
+         * 参数非法（模板/画面尺寸为 0）时的配对分：写入一个非空值，
+         * 让日志能区分「本次根本没做匹配」与「匹配了但分数不够」，避免排查时看不到任何数值。
+         */
+        const val INVALID_SEARCH_SCORE = -1.0
     }
 }
