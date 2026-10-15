@@ -638,6 +638,22 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * 结束任务并退出：运行/暂停中先停止，然后关闭整个悬浮服务。
+     *
+     * onDestroy 会一并收掉悬浮球、侧坞、控制台、顶部提示条、任务编辑器与弹窗，
+     * 用户不必再绕到设置页去关「悬浮球」开关。
+     */
+    private fun finishTaskAndExit() {
+        val state = RuntimeBus.state.value
+        if (state == PlaybackState.RUNNING || state == PlaybackState.PAUSED) {
+            ServiceLocator.player?.stop()
+            RuntimeBus.log("结束任务：已停止运行")
+        }
+        RuntimeBus.log("结束任务：退出悬浮球")
+        OverlayService.stop(this)
+    }
+
     // ---------------- 侧坞长条（贴边快捷控制） ----------------
 
     /**
@@ -742,6 +758,11 @@ class OverlayService : Service() {
         )
         rail.addView(gap(7))
 
+        rail.addView(
+            railTextButton("退出", bg = EXIT_BG) { finishTaskAndExit() },
+        )
+        rail.addView(gap(7))
+
         val record = railButton("●", tint = RECORD_COLOR) {
             if (!RecordingSession.isActive) {
                 Toast.makeText(this, "请先创建或打开一个任务，再开始录制", Toast.LENGTH_SHORT).show()
@@ -784,7 +805,7 @@ class OverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = if (dockLeft) dp(RAIL_MARGIN_DP) else dm.widthPixels - dp(RAIL_WIDTH_DP) - dp(RAIL_MARGIN_DP)
-            y = (ball?.y ?: dp(160)).coerceIn(0, (dm.heightPixels - dp(280)).coerceAtLeast(0))
+            y = (ball?.y ?: dp(160)).coerceIn(0, (dm.heightPixels - dp(340)).coerceAtLeast(0))
         }
         rail.translationX = (if (dockLeft) -1 else 1) * dp(24).toFloat()
         rail.alpha = 0f
@@ -919,12 +940,14 @@ class OverlayService : Service() {
             ServiceLocator.player?.stop()
             RuntimeBus.log("控制台：停止")
         }
+        val endTask = button("结束任务") { finishTaskAndExit() }
         startButton = start
         pauseButton = pause
         stopButton = stop
         playRow.addView(start)
         playRow.addView(pause)
         playRow.addView(stop)
+        playRow.addView(endTask)
         root.addView(playRow)
 
         // 录制控制
@@ -1416,6 +1439,9 @@ class OverlayService : Service() {
 
         /** 侧坞「停止」按钮底色：比录制的粉红更深，避免两个按钮被混淆。 */
         private val STOP_BG = 0xFFD32F2F.toInt()
+
+        /** 侧坞「退出」按钮底色：与「停止」的红区分开，避免两个红色按钮离得太近。 */
+        private val EXIT_BG = 0xFF546E7A.toInt()
         private val STATUS_BAR_BG = 0xE01B1B1B.toInt()
 
         /** 触摸/视觉容器（含光晕外沿）；玻璃核心略小，留出状态环的位置。 */
