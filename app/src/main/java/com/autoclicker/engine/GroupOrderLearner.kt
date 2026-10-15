@@ -42,7 +42,8 @@ class GroupOrderLearner(private val promoteThreshold: Int = DEFAULT_PROMOTE_THRE
      */
     fun onHit(groupId: String, groupName: String, templateId: String, templateLabel: String) {
         synchronized(lock) {
-            // 已在首位：无需调整（也不必日志），计数继续累计无副作用。
+            // 已在首位：无需调整——不计数、不置顶、不打日志，直接返回。
+            // （因此「首位成员命中得多频繁」这个信息不会被记录，也不存在计数无限增长的问题。）
             if (orders[groupId]?.firstOrNull() == templateId) return
             val groupCounts = counts.getOrPut(groupId) { HashMap() }
             val hits = (groupCounts[templateId] ?: 0) + 1
