@@ -21,10 +21,12 @@ class CoordinateMapper(
     )
 
     fun toPixel(rect: PercentRect): PixelRect = PixelRect(
-        (rect.l * screenWidth).roundToInt().coerceIn(0, screenWidth),
-        (rect.t * screenHeight).roundToInt().coerceIn(0, screenHeight),
-        (rect.r * screenWidth).roundToInt().coerceIn(0, screenWidth),
-        (rect.b * screenHeight).roundToInt().coerceIn(0, screenHeight),
+        // 归一化：手填或拖拽都可能给出左右/上下颠倒的矩形，
+        // 直接换算会得到 r<l 的矩形，后续按「宽度=r-l」计算时会被压成 0，区域形同虚设。
+        (minOf(rect.l, rect.r) * screenWidth).roundToInt().coerceIn(0, screenWidth),
+        (minOf(rect.t, rect.b) * screenHeight).roundToInt().coerceIn(0, screenHeight),
+        (maxOf(rect.l, rect.r) * screenWidth).roundToInt().coerceIn(0, screenWidth),
+        (maxOf(rect.t, rect.b) * screenHeight).roundToInt().coerceIn(0, screenHeight),
     )
 
     fun toPercent(p: PixelPoint): PercentPoint = PercentPoint(

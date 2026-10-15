@@ -313,11 +313,15 @@ class ActionExecutor(
         }
         // 识别区域优先级：动作自身 region > 模板默认 region > 全屏。
         val effectiveRegion = action.region ?: templates.get(action.templateId)?.region
+        // 记录本次重试里是否真的做过一次匹配：截屏失败与「匹配了但没找到」是完全不同的故障，
+        // 若都打成「未找到图片模板」，排查时会看不到任何线索。
+        var matched = false
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrame() ?: return@retryDetect null
             try {
                 val frameMapper = CoordinateMapper(frame.width, frame.height)
                 val region = effectiveRegion?.let { frameMapper.toPixel(it) }
+                matched = true
                 finder.find(action.templateId, action.similarity, region, frame)
             } finally {
                 frame.recycle()
@@ -328,7 +332,15 @@ class ActionExecutor(
         val score = finder.lastScore()
         val scoreText = score?.let { "（相似度 %.2f，阈值 %.2f）".format(it, action.similarity) } ?: ""
         if (hit == null) {
-            RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
+            if (matched) {
+                RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
+            } else {
+                // 一次都没截到屏，说明是采集能力问题，不是模板或阈值问题。
+                RuntimeBus.log(
+                    LogLevel.WARN,
+                    "本次未能获取屏幕画面（截屏失败/未就绪），无法识别图片模板：$name",
+                )
+            }
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
