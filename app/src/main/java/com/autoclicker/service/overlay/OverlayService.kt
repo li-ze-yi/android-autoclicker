@@ -305,6 +305,9 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         hideConsole()
+        // 侧坞是独立的悬浮窗（addView 到 WindowManager），不会随 Service 销毁自动移除。
+        // 漏掉这一行会让「退出」后侧坞残留在屏幕上，且上面的按钮已不属于活着的服务。
+        hideRail()
         hideFloatingBall()
         hideStatusBar()
         // 任务编辑器与运行期弹窗都是独立悬浮窗，不随上面几个一起移除，必须显式关闭，否则会残留泄漏。
@@ -639,7 +642,7 @@ class OverlayService : Service() {
     }
 
     /**
-     * 结束任务并退出：运行/暂停中先停止，然后关闭整个悬浮服务。
+     * 结束任务并退出：运行/暂停中先停止、结束录制会话，然后关闭整个悬浮服务。
      *
      * onDestroy 会一并收掉悬浮球、侧坞、控制台、顶部提示条、任务编辑器与弹窗，
      * 用户不必再绕到设置页去关「悬浮球」开关。
@@ -650,6 +653,12 @@ class OverlayService : Service() {
             ServiceLocator.player?.stop()
             RuntimeBus.log("结束任务：已停止运行")
         }
+        // 退出时一并结束录制会话：录制由独立单例持有，服务销毁不会带上它，
+        // 不处理会让录制在后台继续跑，并残留精确浮层 / 取点层。
+        // 未在录制时该调用只会回收可能残留的取点层，无副作用。
+        val wasRecording = Recorder.isRecording()
+        runCatching { Recorder.stop(this) }
+        if (wasRecording) RuntimeBus.log("结束任务：已停止录制")
         RuntimeBus.log("结束任务：退出悬浮球")
         OverlayService.stop(this)
     }
