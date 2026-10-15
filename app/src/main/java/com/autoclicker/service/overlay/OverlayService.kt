@@ -677,6 +677,25 @@ class OverlayService : Service() {
                 setOnClickListener { onClick() }
             }
 
+        /**
+         * 带文字的胶囊按钮：用于「停止」这类需要一眼认出的操作。
+         * 侧坞其余按钮都是裸符号，用户容易把 ■ 当成装饰而不是按钮。
+         */
+        fun railTextButton(label: String, bg: Int, onClick: () -> Unit): TextView =
+            TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                textSize = 11f
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(15).toFloat()
+                    setColor(bg)
+                    setStroke(dp(1), 0x40FFFFFF)
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(46), dp(30))
+                setOnClickListener { onClick() }
+            }
+
         fun gap(h: Int) = View(this).apply {
             layoutParams = LinearLayout.LayoutParams(1, dp(h))
         }
@@ -716,7 +735,7 @@ class OverlayService : Service() {
         rail.addView(gap(7))
 
         rail.addView(
-            railButton("■") {
+            railTextButton("停止", bg = STOP_BG) {
                 ServiceLocator.player?.stop()
                 RuntimeBus.log("侧坞：停止")
             },
@@ -1394,6 +1413,9 @@ class OverlayService : Service() {
         private val STEP_COLOR = 0xFFFFC107.toInt()
         private val GROUP_COLOR = 0xFF4FC3F7.toInt()
         private val RECORD_COLOR = 0xFFFF8A80.toInt()
+
+        /** 侧坞「停止」按钮底色：比录制的粉红更深，避免两个按钮被混淆。 */
+        private val STOP_BG = 0xFFD32F2F.toInt()
         private val STATUS_BAR_BG = 0xE01B1B1B.toInt()
 
         /** 触摸/视觉容器（含光晕外沿）；玻璃核心略小，留出状态环的位置。 */
