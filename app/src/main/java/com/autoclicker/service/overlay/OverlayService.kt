@@ -149,6 +149,7 @@ class OverlayService : Service() {
         ServiceLocator.overlay = controller
         observeAutoShrink()
         observeStatusBar()
+        observeBoundScript()
     }
 
     // ---------------- 屏幕顶部运行提示条 ----------------
@@ -251,6 +252,31 @@ class OverlayService : Service() {
                 val enteredRecording = state == RecordingState.RECORDING && lastRecordingState != RecordingState.RECORDING
                 lastRecordingState = state
                 if (enteredRecording) hideConsole()
+            }
+        }
+    }
+
+    /**
+     * 让侧坞/控制台的「当前任务」跟随任务绑定自动同步。
+     *
+     * 首页「运行」走的是两条链路：先把任务绑定到 [RecordingSession]（**同步**），
+     * 再通过 Intent 通知本服务；而 Intent 那条链路要异步读任务列表（`loadScripts()`），
+     * 存在时间差。若不同步，绑定后立刻长按悬浮球 / 点「开始」，跑的仍是上一次选中的任务——
+     * 表现为「切换任务不生效、跑的是旧任务」。
+     */
+    private fun observeBoundScript() {
+        scope.launch {
+            RecordingSession.scriptId.collect { id ->
+                if (id == null || selectedScript?.id == id) return@collect
+                val known = scripts.firstOrNull { it.id == id }
+                if (known != null) {
+                    selectedScript = known
+                    updateScriptLabel()
+                } else {
+                    // 任务列表还没加载、或该任务不在当前列表里：交给 loadScripts 刷新并优先选中它。
+                    pendingScriptId = id
+                    loadScripts()
+                }
             }
         }
     }
@@ -602,12 +628,11 @@ class OverlayService : Service() {
             return
         }
         scope.launch {
-            val script = selectedScript ?: ServiceLocator.scripts.list().firstOrNull()
+            val script = selectedScript
             if (script == null) {
-                RuntimeBus.log(LogLevel.WARN, "悬浮球：没有可用任务")
+                RuntimeBus.log(LogLevel.WARN, "悬浮球：还没有选中任务，请先在首页点「运行」或在控制台里选择任务")
                 return@launch
             }
-            selectedScript = script
             RuntimeBus.log("悬浮球：运行「${script.name}」")
             ServiceLocator.player?.play(script)
         }
@@ -1112,12 +1137,11 @@ class OverlayService : Service() {
     private fun startSelectedScript() {
         if (!PermissionChecker.requireAccessibility(this)) return
         scope.launch {
-            val script = selectedScript ?: scripts.firstOrNull()
+            val script = selectedScript
             if (script == null) {
-                RuntimeBus.log(LogLevel.WARN, "控制台：请先选择任务")
+                RuntimeBus.log(LogLevel.WARN, "控制台：还没有选中任务，请先点「刷新」或从首页运行任务")
                 return@launch
             }
-            selectedScript = script
             RuntimeBus.log("控制台：运行「${script.name}」")
             ServiceLocator.player?.play(script)
         }
