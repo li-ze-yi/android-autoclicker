@@ -74,6 +74,7 @@ class ActionExecutor(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val templates by lazy { ServiceLocator.templates }
     private val textGroups by lazy { ServiceLocator.textGroups }
+    private val templateGroups by lazy { ServiceLocator.templateGroups }
     private val groupCursor = HashMap<String, Int>()
     private val numberCursor = HashMap<String, Long>()
     private var tts: TextToSpeech? = null
@@ -311,43 +312,70 @@ class ActionExecutor(
             RuntimeBus.log(LogLevel.WARN, "图像识别能力不可用（无障碍服务未就绪），无法识别图片模板")
             return StepOutcome(success = false)
         }
-        // 识别区域优先级：动作自身 region > 模板默认 region > 全屏。
-        val effectiveRegion = action.region ?: templates.get(action.templateId)?.region
+        // 模板组模式：组内多个模板任一命中即算成功（按组内顺序先命中先停）。groupId 为空走单模板，行为不变。
+        val group = action.groupId.takeIf { it.isNotBlank() }?.let { templateGroups.get(it) }
+        val targetIds = group?.memberIds ?: listOf(action.templateId).filter { it.isNotBlank() }
+        if (targetIds.isEmpty()) {
+            RuntimeBus.log(LogLevel.WARN, "点击图片未配置模板或模板组（组内也没有成员）")
+            return StepOutcome(success = false)
+        }
+        // 识别区域：动作自身 region 覆盖全体成员；单模板时回退到模板默认 region；
+        // 组模式下各成员的区域由识别器逐个解析（成员模板自身 region > 全屏）。
+        val effectiveRegion = action.region
+            ?: if (group == null) templates.get(action.templateId)?.region else null
         // 记录本次重试里是否真的做过一次匹配：截屏失败与「匹配了但没找到」是完全不同的故障，
         // 若都打成「未找到图片模板」，排查时会看不到任何线索。
         var matched = false
+        var hitTemplateId: String? = null
         val hit = retryDetect(action.detectCount, action.detectIntervalMs) {
             val frame = captureFrame() ?: return@retryDetect null
             try {
                 val frameMapper = CoordinateMapper(frame.width, frame.height)
                 val region = effectiveRegion?.let { frameMapper.toPixel(it) }
                 matched = true
-                finder.find(action.templateId, action.similarity, region, frame)
+                if (group != null) {
+                    // 这里传的 region 即「动作限定区域」：非空时覆盖全体成员，空则各成员用自己的模板区域。
+                    finder.findFirst(targetIds, action.similarity, region, frame)?.let {
+                        hitTemplateId = it.first
+                        it.second
+                    }
+                } else {
+                    finder.find(action.templateId, action.similarity, region, frame)
+                }
             } finally {
                 frame.recycle()
             }
         }
-        val name = templateName(action.templateId)
+        val singleName = templateName(action.templateId)
         // 带上相似度：能区分「画面里确实还有目标」（分数远高于阈值）和「擦边误判」（贴着阈值）。
         val score = finder.lastScore()
         val scoreText = score?.let { "（相似度 %.2f，阈值 %.2f）".format(it, action.similarity) } ?: ""
         if (hit == null) {
+            val target = if (group != null) "模板组「${group.name}」" else singleName
             if (matched) {
-                RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$name$scoreText")
+                RuntimeBus.log(LogLevel.WARN, "未找到图片模板：$target$scoreText")
             } else {
                 // 一次都没截到屏，说明是采集能力问题，不是模板或阈值问题。
                 RuntimeBus.log(
                     LogLevel.WARN,
-                    "本次未能获取屏幕画面（截屏失败/未就绪），无法识别图片模板：$name",
+                    "本次未能获取屏幕画面（截屏失败/未就绪），无法识别图片模板：$target",
                 )
             }
             return StepOutcome(success = false)
         }
         val point = mapper().applyOffset(hit, action.offset)
-        RuntimeBus.log(
-            "识别到模板「$name」$scoreText，点击 (${point.x}, ${point.y})" +
-                (if (effectiveRegion != null) "，区域 ${regionText(effectiveRegion)}" else ""),
-        )
+        val regionSuffix = if (effectiveRegion != null) "，区域 ${regionText(effectiveRegion)}" else ""
+        if (group != null) {
+            val hitName = hitTemplateId?.let { templateName(it) } ?: action.templateId
+            RuntimeBus.log(
+                "识别到模板组「${group.name}」（命中模板「$hitName」）$scoreText，" +
+                    "点击 (${point.x}, ${point.y})$regionSuffix",
+            )
+        } else {
+            RuntimeBus.log(
+                "识别到模板「$singleName」$scoreText，点击 (${point.x}, ${point.y})$regionSuffix",
+            )
+        }
         return StepOutcome(success = clickPixel(point.x, point.y, 60))
     }
 

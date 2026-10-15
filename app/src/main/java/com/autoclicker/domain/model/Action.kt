@@ -81,7 +81,10 @@ data class NodeSelector(
 @Serializable
 @SerialName("clickImage")
 data class ClickImageAction(
-    val templateId: String,
+    /** 单模板模式的模板 id；使用模板组（[groupId] 非空）时忽略本字段。 */
+    val templateId: String = "",
+    /** 模板组 id；非空时按组内多模板识别（先命中先停），忽略 [templateId]。 */
+    val groupId: String = "",
     val similarity: Float = 0.85f,
     val region: PercentRect? = null,
     /** 命中点偏移（固定平移 + 随机抖动），用于校准与防检测。 */
@@ -242,6 +245,8 @@ enum class CompareOp { EQ, NE, GT, GE, LT, LE, CONTAINS, NOT_CONTAINS, REGEX }
 data class ConditionClause(
     val type: ConditionType,
     val templateId: String? = null,
+    /** 模板组 id（仅 IMAGE 条件用）；非空时按组内多模板识别，忽略 [templateId]。 */
+    val groupId: String? = null,
     val similarity: Float = 0.85f,
     val text: String? = null,
     val useRegex: Boolean = false,

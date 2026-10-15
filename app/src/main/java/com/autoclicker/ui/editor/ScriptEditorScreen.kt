@@ -66,6 +66,7 @@ import com.autoclicker.domain.model.FunctionPackage
 import com.autoclicker.domain.model.GroupNode
 import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.ImageTemplateGroup
 import com.autoclicker.domain.model.Script
 import com.autoclicker.domain.model.ScriptNode
 import com.autoclicker.domain.model.StepNode
@@ -99,6 +100,7 @@ fun ScriptEditorScreen(
     var templates by remember { mutableStateOf<List<ImageTemplate>>(emptyList()) }
     var packages by remember { mutableStateOf<List<FunctionPackage>>(emptyList()) }
     var textGroups by remember { mutableStateOf<List<TextGroup>>(emptyList()) }
+    var templateGroups by remember { mutableStateOf<List<ImageTemplateGroup>>(emptyList()) }
     var expandedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     var pickerOpen by remember { mutableStateOf(false) }
@@ -129,6 +131,7 @@ fun ScriptEditorScreen(
         templates = runCatching { ServiceLocator.templates.list() }.getOrDefault(emptyList())
         packages = runCatching { ServiceLocator.packages.list() }.getOrDefault(emptyList())
         textGroups = runCatching { ServiceLocator.textGroups.list() }.getOrDefault(emptyList())
+        templateGroups = runCatching { ServiceLocator.templateGroups.list() }.getOrDefault(emptyList())
         loading = false
     }
 
@@ -209,7 +212,8 @@ fun ScriptEditorScreen(
                 // 悬浮窗控制台与编辑器共用录制会话，保存后同步，避免两处步骤不一致。
                 RecordingSession.syncFrom(saved)
                 val known = packages.map { it.id }.toSet()
-                issues = StructureValidator.validateScript(saved, known)
+                val knownGroups = templateGroups.map { it.id }.toSet()
+                issues = StructureValidator.validateScript(saved, known, knownGroups)
             }
         }
     }
@@ -458,6 +462,7 @@ fun ScriptEditorScreen(
             templates = templates,
             packages = packages,
             textGroups = textGroups,
+            templateGroups = templateGroups,
             steps = script?.nodes?.flattenSteps().orEmpty(),
             onConfirm = { newAction ->
                 val current = script?.nodes.orEmpty()

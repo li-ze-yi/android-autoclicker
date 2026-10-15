@@ -106,13 +106,44 @@ object NccMatcher {
         val tplGray = DoubleArray(tw * th)
         for (i in 0 until tw * th) tplGray[i] = luminance(template[i])
 
-        val maxX = rw - tw
-        val maxY = rh - th
+        // 在裁剪后的灰度图上匹配：命中点是裁剪坐标系下的坐标，换算回原场景时补回区域偏移。
+        val result = findBestGray(tplGray, tw, th, sceneGray, rw, rh, similarity)
+        val point = result.point ?: return MatchResult(null, result.score)
+        return MatchResult(PixelPoint(rl + point.x, rt + point.y), result.score)
+    }
+
+    /**
+     * 在**已灰度化**的场景 / 模板数组上查找最佳匹配位置。
+     *
+     * 供批量模板匹配复用：搜索区域只裁剪一次、场景灰度只计算一次，组内多个模板都直接在这里查，
+     * 省掉「每个模板都把同一块场景重算一遍灰度」的重复开销。
+     *
+     * @param templateGray 模板灰度，长度为 tw*th
+     * @param sceneGray 场景灰度（已按搜索区域裁剪），长度为 sw*sh
+     * @param similarity 相似度阈值，命中需 >= 该值
+     * @return 命中点为 [sceneGray] 坐标系（相对裁剪区左上角）下的匹配区域中心点；
+     *         未命中或参数非法时 point 为 null，score 保留本次搜索的最高分（便于日志诊断）。
+     */
+    fun findBestGray(
+        templateGray: DoubleArray,
+        tw: Int,
+        th: Int,
+        sceneGray: DoubleArray,
+        sw: Int,
+        sh: Int,
+        similarity: Float,
+    ): MatchResult {
+        if (tw <= 0 || th <= 0 || sw <= 0 || sh <= 0) return MatchResult(null, -1.0)
+        if (templateGray.size < tw * th || sceneGray.size < sw * sh) return MatchResult(null, -1.0)
+        if (tw > sw || th > sh) return MatchResult(null, -1.0)
+
+        val maxX = sw - tw
+        val maxY = sh - th
         if (maxX < 0 || maxY < 0) return MatchResult(null, -1.0)
 
         // 模板近似恒定时 NCC 无定义（任何窗口都算不出相似度），
         // 直接判定无目标，也避免后续对整屏做无意义的逐像素空扫。
-        if (sqrt(sumSqDev(tplGray, mean(tplGray))) < 1e-6) return MatchResult(null, -1.0)
+        if (sqrt(sumSqDev(templateGray, mean(templateGray))) < 1e-6) return MatchResult(null, -1.0)
 
         var bestX = 0
         var bestY = 0
@@ -126,14 +157,14 @@ object NccMatcher {
 
         // 选择起始降采样倍数
         val startFactor = when {
-            tw >= 16 && th >= 16 && rw >= 64 && rh >= 64 -> 4
-            tw >= 8 && th >= 8 && rw >= 32 && rh >= 32 -> 2
+            tw >= 16 && th >= 16 && sw >= 64 && sh >= 64 -> 4
+            tw >= 8 && th >= 8 && sw >= 32 && sh >= 32 -> 2
             else -> 1
         }
 
         var f = startFactor
         while (true) {
-            val res = searchLevel(sceneGray, rw, rh, tplGray, tw, th, f, winL, winT, winR, winB, 0L)
+            val res = searchLevel(sceneGray, sw, sh, templateGray, tw, th, f, winL, winT, winR, winB, 0L)
             if (f == 1) {
                 bestX = res.x
                 bestY = res.y
@@ -165,7 +196,7 @@ object NccMatcher {
             // 整个漏掉真实目标（单元测试有此用例）。半分辨率 + 限时，防「明明有却报没有」。
             // 大模板在粗搜网格上采样充足，峰位可靠——未命中就是真没有，
             // 直接返回失败，让用户配置的「失败跳转」立刻生效，不做多余扫描。
-            val fb = fallbackHalfRes(sceneGray, rw, rh, tplGray, tw, th, maxX, maxY, similarity)
+            val fb = fallbackHalfRes(sceneGray, sw, sh, templateGray, tw, th, maxX, maxY, similarity)
             if (fb.score > bestScore) {
                 bestX = fb.x
                 bestY = fb.y
@@ -175,7 +206,17 @@ object NccMatcher {
 
         if (bestScore < similarity) return MatchResult(null, bestScore)
         // 返回匹配区域中心点，便于直接作为点击坐标
-        return MatchResult(PixelPoint(rl + bestX + tw / 2, rt + bestY + th / 2), bestScore)
+        return MatchResult(PixelPoint(bestX + tw / 2, bestY + th / 2), bestScore)
+    }
+
+    /**
+     * 把 ARGB 像素数组转为灰度（Rec.601）数组，供批量模板匹配预先灰度化并复用同一份场景灰度。
+     * [size] 通常为 pixels.size；显式传入便于只转换有效长度。
+     */
+    fun grayOf(pixels: IntArray, size: Int): DoubleArray {
+        val out = DoubleArray(size)
+        for (i in 0 until size) out[i] = luminance(pixels[i])
+        return out
     }
 
     /** 单层搜索结果：坐标为该降采样层坐标系下的模板左上角。 */

@@ -115,7 +115,22 @@ interface ImageFinder {
         frame: ScreenFrame,
     ): PixelPoint?
 
-    /** 最近一次 [find] 的最高相似度（含未达阈值的情况），仅用于日志诊断；不实现则返回 null。 */
+    /**
+     * 多模板匹配：按 [templateIds] 的顺序逐个匹配，**命中第一个即停止**，返回命中模板 id 与命中点。
+     * 未命中返回 null。
+     *
+     * 识别区域**按成员各自解析**：[actionRegion]（动作显式限定）覆盖全体成员；否则用成员模板自身
+     * 保存的 region；都没有则全屏。成员区域小于其模板时忽略该区域并回退全屏（与单模板识别一致）。
+     * 不实现该能力的实现返回 null（等价于「不支持模板组」）。
+     */
+    suspend fun findFirst(
+        templateIds: List<String>,
+        similarity: Float,
+        actionRegion: PixelRect?,
+        frame: ScreenFrame,
+    ): Pair<String, PixelPoint>? = null
+
+    /** 最近一次 [find] / [findFirst] 的最高相似度（含未达阈值的情况），仅用于日志诊断；不实现则返回 null。 */
     fun lastScore(): Double? = null
 }
 

@@ -18,3 +18,18 @@ data class ImageTemplate(
     val region: PercentRect? = null,
     val createdAt: Long = System.currentTimeMillis(),
 )
+
+/**
+ * 图像模板组：把同一目标在不同分辨率/主题/版本下的多个外观收拢成一个实体，可跨动作复用。
+ *
+ * 识别时按 [memberIds] 的顺序逐个匹配，**任一命中即算成功并立即停止**（不跑完整组）。
+ * 每个成员沿用各自的识别区域：动作 region 覆盖全体成员 > 成员模板自身 region > 全屏，
+ * 与单模板识别语义一致。
+ */
+@Serializable
+data class ImageTemplateGroup(
+    val id: String,
+    val name: String,
+    /** 成员模板 id（按识别优先级排序）。 */
+    val memberIds: List<String> = emptyList(),
+)

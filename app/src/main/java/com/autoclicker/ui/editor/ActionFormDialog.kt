@@ -49,6 +49,7 @@ import com.autoclicker.domain.model.GestureStroke
 import com.autoclicker.domain.model.GlobalKeyAction
 import com.autoclicker.domain.model.GlobalKeyName
 import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.ImageTemplateGroup
 import com.autoclicker.domain.model.InputTextAction
 import com.autoclicker.domain.model.JumpAction
 import com.autoclicker.domain.model.JumpMode
@@ -83,6 +84,7 @@ fun ActionFormDialog(
     templates: List<ImageTemplate>,
     packages: List<FunctionPackage>,
     textGroups: List<TextGroup>,
+    templateGroups: List<ImageTemplateGroup>,
     steps: List<StepNode>,
     onConfirm: (Action) -> Unit,
     onDismiss: () -> Unit,
@@ -92,7 +94,7 @@ fun ActionFormDialog(
         onDismissRequest = onDismiss,
         title = { Text(actionTitle(initial)) },
         text = {
-            ActionFormContent(initial, templates, packages, textGroups, steps) { built = it }
+            ActionFormContent(initial, templates, packages, textGroups, templateGroups, steps) { built = it }
         },
         confirmButton = { TextButton(onClick = { onConfirm(built) }) { Text("确定") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
@@ -110,6 +112,7 @@ fun ActionFormContent(
     templates: List<ImageTemplate>,
     packages: List<FunctionPackage>,
     textGroups: List<TextGroup>,
+    templateGroups: List<ImageTemplateGroup>,
     steps: List<StepNode>,
     onChanged: (Action) -> Unit,
 ) {
@@ -124,7 +127,7 @@ fun ActionFormContent(
             is LongPressAction -> LongPressForm(a, onChanged)
             is RepeatClickAction -> RepeatClickForm(a, onChanged)
             is AreaRandomClickAction -> AreaRandomForm(a, onChanged)
-            is ClickImageAction -> ClickImageForm(a, templates, onChanged)
+            is ClickImageAction -> ClickImageForm(a, templates, templateGroups, onChanged)
             is ClickColorAction -> ClickColorForm(a, onChanged)
             is ClickTextAction -> ClickTextForm(a, onChanged)
             is ClickNodeAction -> ClickNodeForm(a, onChanged)
@@ -136,7 +139,7 @@ fun ActionFormContent(
             is InputTextAction -> InputTextForm(a, textGroups, onChanged)
             is ExtractContentAction -> ExtractContentForm(a, templates, onChanged)
             is VariableOpAction -> VariableOpForm(a, onChanged)
-            is ConditionAction -> ConditionForm(a, templates, onChanged)
+            is ConditionAction -> ConditionForm(a, templates, templateGroups, onChanged)
             is JumpAction -> JumpForm(a, steps, onChanged)
             is CallFunctionAction -> CallFunctionForm(a, packages, onChanged)
             is DelayAction -> DelayForm(a, onChanged)
@@ -275,8 +278,15 @@ private fun AreaRandomForm(a: AreaRandomClickAction, onChange: (Action) -> Unit)
 // ---------------- 识别点击类 ----------------
 
 @Composable
-private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, onChange: (Action) -> Unit) {
+private fun ClickImageForm(
+    a: ClickImageAction,
+    templates: List<ImageTemplate>,
+    templateGroups: List<ImageTemplateGroup>,
+    onChange: (Action) -> Unit,
+) {
     val context = LocalContext.current
+    var useGroup by remember { mutableStateOf(a.groupId.isNotBlank()) }
+    var groupId by remember { mutableStateOf(a.groupId) }
     var templateId by remember { mutableStateOf(a.templateId.ifBlank { templates.firstOrNull()?.id.orEmpty() }) }
     var extraTemplates by remember { mutableStateOf<List<ImageTemplate>>(emptyList()) }
     val allTemplates = remember(templates, extraTemplates) {
@@ -294,7 +304,9 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
     val emit: () -> Unit = {
         onChange(
             ClickImageAction(
-                templateId = templateId,
+                // 组模式与单模板互斥：用组时清空 templateId，反之清空 groupId。
+                templateId = if (useGroup) "" else templateId,
+                groupId = if (useGroup) groupId else "",
                 similarity = parseFloat(similarity, a.similarity),
                 region = if (regionEnabled) {
                     PercentRect(
@@ -310,46 +322,72 @@ private fun ClickImageForm(a: ClickImageAction, templates: List<ImageTemplate>, 
             ),
         )
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    BoolFieldRow("使用模板组（多模板任一命中即算成功）", useGroup) { useGroup = it; emit() }
+    if (useGroup) {
         ChoiceField(
-            label = "模板",
-            selected = templateId,
-            options = allTemplates.map { it.id to it.name },
-            modifier = Modifier.weight(1f),
-        ) { templateId = it; emit() }
-        OutlinedButton(
-            onClick = capture@{
-                if (!PermissionChecker.requireOverlay(context)) return@capture
-                // 截图前先收起悬浮窗，避免悬浮球被截进画面。
-                OverlayService.enterCaptureMode(context)
-                TemplateCaptureOverlay.start(context) { template, _ ->
-                    OverlayService.exitCaptureMode(context)
-                    if (template != null) {
-                        extraTemplates = extraTemplates + template
-                        templateId = template.id
-                        // 框选的识别区域已随模板保存，这里只需选中新模板即可；
-                        // 动作上的 region 是「覆盖模板」用的，不在此自动填充。
-                        emit()
+            label = "模板组",
+            selected = groupId.ifBlank { null },
+            options = templateGroups.map { it.id to it.name },
+        ) { groupId = it; emit() }
+        if (templateGroups.isEmpty()) {
+            Text(
+                "还没有模板组：请到「模板」页 →「模板组」中新建并勾选成员",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        Text(
+            "组内识别区域：动作限定区域 > 各模板自身区域 > 全屏",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ChoiceField(
+                label = "模板",
+                selected = templateId,
+                options = allTemplates.map { it.id to it.name },
+                modifier = Modifier.weight(1f),
+            ) { templateId = it; emit() }
+            OutlinedButton(
+                onClick = capture@{
+                    if (!PermissionChecker.requireOverlay(context)) return@capture
+                    // 截图前先收起悬浮窗，避免悬浮球被截进画面。
+                    OverlayService.enterCaptureMode(context)
+                    TemplateCaptureOverlay.start(context) { template, _ ->
+                        OverlayService.exitCaptureMode(context)
+                        if (template != null) {
+                            extraTemplates = extraTemplates + template
+                            templateId = template.id
+                            // 框选的识别区域已随模板保存，这里只需选中新模板即可；
+                            // 动作上的 region 是「覆盖模板」用的，不在此自动填充。
+                            emit()
+                        }
                     }
-                }
-            },
-            modifier = Modifier.padding(start = 8.dp),
-        ) { Text("截图新建模板") }
+                },
+                modifier = Modifier.padding(start = 8.dp),
+            ) { Text("截图新建模板") }
+        }
+        val templateRegion = allTemplates.firstOrNull { it.id == templateId }?.region
+        Text(
+            "模板识别区域：" + (
+                templateRegion?.let {
+                    "已限定 ${formatPercent(it.l)}%,${formatPercent(it.t)}% → ${formatPercent(it.r)}%,${formatPercent(it.b)}%"
+                } ?: "全屏"
+                ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
-    val templateRegion = allTemplates.firstOrNull { it.id == templateId }?.region
-    Text(
-        "模板识别区域：" + (
-            templateRegion?.let {
-                "已限定 ${formatPercent(it.l)}%,${formatPercent(it.t)}% → ${formatPercent(it.r)}%,${formatPercent(it.b)}%"
-            } ?: "全屏"
-            ),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 4.dp),
-    )
     NumberFieldRow("相似度（0..1）", similarity) { similarity = it; emit() }
     OffsetFields(offset) { offset = it; emit() }
-    BoolFieldRow("限定识别区域（覆盖模板）", regionEnabled) { regionEnabled = it; emit() }
+    BoolFieldRow(if (useGroup) "限定识别区域（覆盖组内全部模板）" else "限定识别区域（覆盖模板）", regionEnabled) {
+        regionEnabled = it
+        emit()
+    }
     if (regionEnabled) {
         PercentRectFields(l, t, r, b, { l = it; emit() }, { t = it; emit() }, { r = it; emit() }, { b = it; emit() })
     }
@@ -689,12 +727,19 @@ private fun VariableOpForm(a: VariableOpAction, onChange: (Action) -> Unit) {
 // ---------------- 逻辑控制 ----------------
 
 @Composable
-private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, onChange: (Action) -> Unit) {
+private fun ConditionForm(
+    a: ConditionAction,
+    templates: List<ImageTemplate>,
+    templateGroups: List<ImageTemplateGroup>,
+    onChange: (Action) -> Unit,
+) {
     val clause = a.clauses.firstOrNull() ?: ConditionClause(type = ConditionType.NODE)
     var type by remember { mutableStateOf(clause.type) }
     var text by remember { mutableStateOf(clause.text.orEmpty()) }
     var useRegex by remember { mutableStateOf(clause.useRegex) }
     var templateId by remember { mutableStateOf(clause.templateId.orEmpty()) }
+    var useGroup by remember { mutableStateOf(!clause.groupId.isNullOrBlank()) }
+    var groupId by remember { mutableStateOf(clause.groupId.orEmpty()) }
     var color by remember { mutableStateOf(colorToHex(clause.color ?: 0xFFFF0000.toInt())) }
     var tolerance by remember { mutableStateOf(clause.tolerance.toString()) }
     var nodeSelector by remember { mutableStateOf(clause.nodeSelector) }
@@ -714,7 +759,9 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
     val emit: () -> Unit = {
         val newClause = clause.copy(
             type = type,
-            templateId = templateId.ifBlank { null },
+            // 组模式与单模板互斥：用组时不填 templateId，反之不填 groupId。
+            templateId = if (useGroup) null else templateId.ifBlank { null },
+            groupId = if (useGroup) groupId.ifBlank { null } else null,
             text = text.ifBlank { null },
             useRegex = useRegex,
             color = parseColor(color, 0xFFFF0000.toInt()),
@@ -751,11 +798,28 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
     ) { t -> type = t; emit() }
     when (type) {
         ConditionType.IMAGE -> {
-            ChoiceField(
-                label = "模板",
-                selected = templateId.ifBlank { null },
-                options = templates.map { it.id to it.name },
-            ) { id -> templateId = id; emit() }
+            BoolFieldRow("使用模板组（多模板任一命中即算满足）", useGroup) { useGroup = it; emit() }
+            if (useGroup) {
+                ChoiceField(
+                    label = "模板组",
+                    selected = groupId.ifBlank { null },
+                    options = templateGroups.map { it.id to it.name },
+                ) { id -> groupId = id; emit() }
+                if (templateGroups.isEmpty()) {
+                    Text(
+                        "还没有模板组：请到「模板」页 →「模板组」中新建并勾选成员",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            } else {
+                ChoiceField(
+                    label = "模板",
+                    selected = templateId.ifBlank { null },
+                    options = templates.map { it.id to it.name },
+                ) { id -> templateId = id; emit() }
+            }
         }
         ConditionType.TEXT -> {
             TextFieldRow("文字", text) { text = it; emit() }
@@ -790,6 +854,14 @@ private fun ConditionForm(a: ConditionAction, templates: List<ImageTemplate>, on
                 { regionT = it; emit() },
                 { regionR = it; emit() },
                 { regionB = it; emit() },
+            )
+        }
+        if (type == ConditionType.IMAGE && useGroup) {
+            Text(
+                "组内识别区域：条件限定区域 > 各模板自身区域 > 全屏",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
     }

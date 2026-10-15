@@ -100,6 +100,46 @@ class NccMatcherTest {
     }
 
     @Test
+    fun findBestGrayMatchesOnPrecomputedGray() {
+        val tw = 24
+        val th = 24
+        val sw = 200
+        val sh = 160
+        val px = 50
+        val py = 40
+        val tpl = template(tw, th, seed = 7)
+        val frame = scene(sw, sh, bgSeed = 1, tpl = tpl, tw = tw, th = th, px = px, py = py)
+
+        val res = NccMatcher.findBestGray(
+            NccMatcher.grayOf(tpl, tw * th), tw, th,
+            NccMatcher.grayOf(frame, sw * sh), sw, sh,
+            similarity = 0.9f,
+        )
+
+        // 灰度入口与 ARGB 入口语义一致：命中点为传入灰度图坐标系下的匹配区域中心点
+        assertEquals(PixelPoint(px + tw / 2, py + th / 2), res.point)
+    }
+
+    @Test
+    fun findBestGrayReturnsNullWhenTemplateAbsent() {
+        val tw = 24
+        val th = 24
+        val sw = 200
+        val sh = 160
+        val tpl = template(tw, th, seed = 7)
+        val frame = scene(sw, sh, bgSeed = 1, tpl = tpl, tw = tw, th = th, px = 50, py = 40)
+        val absent = template(tw, th, seed = 999)
+
+        val res = NccMatcher.findBestGray(
+            NccMatcher.grayOf(absent, tw * th), tw, th,
+            NccMatcher.grayOf(frame, sw * sh), sw, sh,
+            similarity = 0.9f,
+        )
+
+        assertNull(res.point)
+    }
+
+    @Test
     fun returnsNullWhenTemplateOutsideRegion() {
         val tw = 24
         val th = 24

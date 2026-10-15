@@ -46,6 +46,7 @@ import com.autoclicker.domain.model.GlobalKeyName
 import com.autoclicker.domain.model.GroupNode
 import com.autoclicker.domain.model.Ids
 import com.autoclicker.domain.model.ImageTemplate
+import com.autoclicker.domain.model.ImageTemplateGroup
 import com.autoclicker.domain.model.InputTextAction
 import com.autoclicker.domain.model.JumpAction
 import com.autoclicker.domain.model.LongPressAction
@@ -799,12 +800,13 @@ object OverlayStepEditor {
         panel.addView(footer)
     }
 
-    /** 「点击图片」的模板选择器：面板内列出现有模板，点选后追加 ClickImageAction。 */
+    /** 「点击图片」的模板/模板组选择器：点选后追加 ClickImageAction。 */
     private fun showTemplatePicker() {
         val panel = root ?: return
         val context = appContext ?: return
         pickerScope.launch {
             val templates = runCatching { ServiceLocator.templates.list() }.getOrElse { emptyList() }
+            val groups = runCatching { ServiceLocator.templateGroups.list() }.getOrElse { emptyList() }
             if (!active) return@launch
             panel.removeAllViews()
             panel.addView(buildHeader(context))
@@ -814,18 +816,32 @@ object OverlayStepEditor {
             val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             body.addView(content)
             panel.addView(body)
-            if (templates.isEmpty()) {
+            if (templates.isEmpty() && groups.isEmpty()) {
                 content.addView(hintText("还没有图像模板：请先在控制台「截图建模板」创建，再回来添加"))
             } else {
-                content.addView(hintText("选择要点击的模板："))
-                templates.forEach { template: ImageTemplate ->
-                    content.addView(
-                        smallButton(template.name) {
-                            appendStep(StepNode(Ids.newId(), ClickImageAction(templateId = template.id)))
-                            mode = Mode.LIST
-                            render()
-                        },
-                    )
+                if (groups.isNotEmpty()) {
+                    content.addView(hintText("选择模板组（组内任一模板命中即算成功）："))
+                    groups.forEach { group: ImageTemplateGroup ->
+                        content.addView(
+                            smallButton("【组】${group.name}（${group.memberIds.size} 张）") {
+                                appendStep(StepNode(Ids.newId(), ClickImageAction(groupId = group.id)))
+                                mode = Mode.LIST
+                                render()
+                            },
+                        )
+                    }
+                }
+                if (templates.isNotEmpty()) {
+                    content.addView(hintText("选择要点击的模板："))
+                    templates.forEach { template: ImageTemplate ->
+                        content.addView(
+                            smallButton(template.name) {
+                                appendStep(StepNode(Ids.newId(), ClickImageAction(templateId = template.id)))
+                                mode = Mode.LIST
+                                render()
+                            },
+                        )
+                    }
                 }
             }
             val footer = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }

@@ -71,14 +71,25 @@ class ConditionEvaluator(private val gate: PauseGate) {
     }
 
     private suspend fun evalImage(clause: ConditionClause): Boolean {
-        val id = clause.templateId ?: return false
+        // 模板组模式：组内多模板任一命中即算满足。groupId 为空走单模板，行为不变。
+        val group = clause.groupId?.takeIf { it.isNotBlank() }
+            ?.let { ServiceLocator.templateGroups.get(it) }
+        val singleId = clause.templateId
+        if (group == null && singleId.isNullOrBlank()) return false
         val frame = captureFrame() ?: return false
         val finder = Platform.images() ?: run { frame.recycle(); return false }
-        // 识别区域优先级：条件子句 region > 模板默认 region > 全屏。
-        val effectiveRegion = clause.region ?: ServiceLocator.templates.get(id)?.region
+        // 识别区域：子句 region 覆盖全体成员；单模板时回退到模板默认 region；
+        // 组模式下各成员的区域由识别器逐个解析（成员模板自身 region > 全屏）。
+        val effectiveRegion = clause.region
+            ?: if (group == null) singleId?.let { ServiceLocator.templates.get(it)?.region } else null
         return try {
             val region = effectiveRegion?.let { CoordinateMapper(frame.width, frame.height).toPixel(it) }
-            finder.find(id, clause.similarity, region, frame) != null
+            if (group != null) {
+                // 这里传的 region 即「条件限定区域」：非空时覆盖全体成员，空则各成员用自己的模板区域。
+                finder.findFirst(group.memberIds, clause.similarity, region, frame) != null
+            } else {
+                finder.find(singleId!!, clause.similarity, region, frame) != null
+            }
         } finally {
             frame.recycle()
         }

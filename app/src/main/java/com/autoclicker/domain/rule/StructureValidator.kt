@@ -27,16 +27,20 @@ data class ValidationIssue(
  */
 object StructureValidator {
 
-    fun validateScript(script: Script, knownPackageIds: Set<String> = emptySet()): List<ValidationIssue> {
+    fun validateScript(
+        script: Script,
+        knownPackageIds: Set<String> = emptySet(),
+        knownGroupIds: Set<String> = emptySet(),
+    ): List<ValidationIssue> {
         val issues = ArrayList<ValidationIssue>()
         if (script.name.isBlank()) {
             issues += ValidationIssue(ValidationIssue.Level.WARNING, "脚本名称为空")
         }
-        validateNodes(script.nodes, knownPackageIds, issues)
+        validateNodes(script.nodes, knownPackageIds, knownGroupIds, issues)
         return issues
     }
 
-    fun validatePackage(pkg: FunctionPackage): List<ValidationIssue> {
+    fun validatePackage(pkg: FunctionPackage, knownGroupIds: Set<String> = emptySet()): List<ValidationIssue> {
         val issues = ArrayList<ValidationIssue>()
         if (pkg.name.isBlank()) {
             issues += ValidationIssue(ValidationIssue.Level.ERROR, "函数包名称为空")
@@ -50,13 +54,14 @@ object StructureValidator {
                 issues += ValidationIssue(ValidationIssue.Level.ERROR, "函数包参数名重复：${it.name}")
             }
         }
-        validateNodes(pkg.nodes, emptySet(), issues)
+        validateNodes(pkg.nodes, emptySet(), knownGroupIds, issues)
         return issues
     }
 
     private fun validateNodes(
         nodes: List<ScriptNode>,
         knownPackageIds: Set<String>,
+        knownGroupIds: Set<String>,
         issues: MutableList<ValidationIssue>,
     ) {
         val allSteps = ArrayList<StepNode>()
@@ -102,8 +107,11 @@ object StructureValidator {
                 is CallFunctionAction -> if (knownPackageIds.isNotEmpty() && action.packageId !in knownPackageIds) {
                     issues += ValidationIssue(ValidationIssue.Level.WARNING, "引用的函数包不存在：${action.packageId}")
                 }
-                is ClickImageAction -> if (action.templateId.isBlank()) {
-                    issues += ValidationIssue(ValidationIssue.Level.ERROR, "点击图片未选择模板：${step.id}")
+                is ClickImageAction -> when {
+                    action.templateId.isBlank() && action.groupId.isBlank() ->
+                        issues += ValidationIssue(ValidationIssue.Level.ERROR, "点击图片未选择模板或模板组：${step.id}")
+                    action.groupId.isNotBlank() && knownGroupIds.isNotEmpty() && action.groupId !in knownGroupIds ->
+                        issues += ValidationIssue(ValidationIssue.Level.WARNING, "引用的模板组不存在：${action.groupId}")
                 }
                 is InputTextAction -> if (action.source.mode == TextMode.TEXT_GROUP && action.source.groupId.isBlank()) {
                     issues += ValidationIssue(ValidationIssue.Level.WARNING, "输入文字未选择文本组：${step.id}")

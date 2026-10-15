@@ -111,7 +111,7 @@ fun actionSummary(action: Action): String = when (action) {
     is LongPressAction -> "长按 (${formatPercent(action.point.x)}%, ${formatPercent(action.point.y)}%) ${action.durationMs}ms"
     is RepeatClickAction -> "连续点击 x${action.count}"
     is AreaRandomClickAction -> "区域随机点击"
-    is ClickImageAction -> "点击图片"
+    is ClickImageAction -> if (action.groupId.isNotBlank()) "点击图片（模板组）" else "点击图片"
     is ClickColorAction -> "点击颜色 ${colorToHex(action.color)}"
     is ClickTextAction -> "点击文字「${action.text}」"
     is ClickNodeAction -> "点击节点"
@@ -123,7 +123,11 @@ fun actionSummary(action: Action): String = when (action) {
     is InputTextAction -> "输入文字"
     is ExtractContentAction -> "内容提取 -> ${action.targetVar}"
     is VariableOpAction -> "变量操作 ${action.varName}"
-    is ConditionAction -> "条件判断（${action.clauses.size} 条）"
+    is ConditionAction -> if (action.clauses.any { !it.groupId.isNullOrBlank() }) {
+        "条件判断（${action.clauses.size} 条，含图片模板组）"
+    } else {
+        "条件判断（${action.clauses.size} 条）"
+    }
     is JumpAction -> "跳转"
     is CallFunctionAction -> "调用函数包"
     is DelayAction -> "延时 ${action.ms}ms"

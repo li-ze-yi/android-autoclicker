@@ -3,10 +3,12 @@ package com.autoclicker.di
 import android.content.Context
 import com.autoclicker.data.repository.FileFunctionPackageRepository
 import com.autoclicker.data.repository.FileScriptRepository
+import com.autoclicker.data.repository.FileTemplateGroupRepository
 import com.autoclicker.data.repository.FileTemplateRepository
 import com.autoclicker.data.repository.FileTextGroupRepository
 import com.autoclicker.data.repository.FunctionPackageRepository
 import com.autoclicker.data.repository.ScriptRepository
+import com.autoclicker.data.repository.TemplateGroupRepository
 import com.autoclicker.data.repository.TemplateRepository
 import com.autoclicker.data.repository.TextGroupRepository
 import com.autoclicker.data.settings.SettingsRepository
@@ -45,6 +47,7 @@ object ServiceLocator {
     val packages: FunctionPackageRepository by lazy { FileFunctionPackageRepository(dataDir) }
     val templates: TemplateRepository by lazy { FileTemplateRepository(dataDir) }
     val textGroups: TextGroupRepository by lazy { FileTextGroupRepository(dataDir) }
+    val templateGroups: TemplateGroupRepository by lazy { FileTemplateGroupRepository(dataDir) }
     val settings: SettingsRepository by lazy { SettingsRepository(appContext) }
 
     // ---------------- 运行期平台能力（由各层注册） ----------------
