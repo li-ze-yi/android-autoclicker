@@ -695,9 +695,9 @@ class OverlayService : Service() {
 
     /**
      * 点悬浮球默认展开的不是大控制台，而是这条贴边的细长条：
-     * 状态灯 + 运行/暂停 + 录制/暂停 + 退出 + 展开完整控制台，竖排一列，
+     * 状态灯 + 运行/暂停 + 录制/暂停 + 退出 + 展开完整控制台 + 收起，竖排一列，
      * 只占屏幕边上一小条，几乎不挡内容。想看日志/编辑步骤再点「▤ 展开」。
-     * 收起不需要按钮：再点一次悬浮球即可（见 [toggleConsole] 的 railView 分支）。
+     * 收起除「✕」按钮外，再点一次悬浮球也可以（见 [toggleConsole] 的 railView 分支）。
      */
     private fun showRail() {
         if (railView != null) return
@@ -829,6 +829,13 @@ class OverlayService : Service() {
                 showConsole()
             },
         )
+        rail.addView(gap(7))
+
+        rail.addView(
+            railButton("✕", tint = Color.parseColor("#BBBBBB")) {
+                hideRail()
+            },
+        )
 
         // 定位：贴到悬浮球吸附的那一侧边缘，纵向从球的位置往下排。
         val dm = resources.displayMetrics
@@ -863,7 +870,7 @@ class OverlayService : Service() {
             .setDuration(240L)
             .setInterpolator(DecelerateInterpolator())
             .start()
-        RuntimeBus.log("侧坞已展开（▶ 运行/暂停，● 录制/暂停，退出，▤ 展开完整控制台；点悬浮球可收起）")
+        RuntimeBus.log("侧坞已展开（▶ 运行/暂停，● 录制/暂停，退出，▤ 展开完整控制台，✕ 收起）")
     }
 
     private fun hideRail() {
