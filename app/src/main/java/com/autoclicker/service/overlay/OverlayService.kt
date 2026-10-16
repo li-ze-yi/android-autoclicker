@@ -87,6 +87,9 @@ class OverlayService : Service() {
 
     /** 侧坞长条：贴边的竖排快捷控制，点悬浮球默认展开它而不是一大块控制台。 */
     private var railView: LinearLayout? = null
+
+    /** 侧坞的窗口参数；置顶重挂时要复用同一份参数，位置/尺寸/flags 都不能变。 */
+    private var railParams: WindowManager.LayoutParams? = null
     private var railLed: View? = null
     private var railPlay: TextView? = null
     private var railRecord: TextView? = null
@@ -251,9 +254,34 @@ class OverlayService : Service() {
             RuntimeBus.recording.collect { state ->
                 val enteredRecording = state == RecordingState.RECORDING && lastRecordingState != RecordingState.RECORDING
                 lastRecordingState = state
-                if (enteredRecording) hideConsole()
+                if (enteredRecording) {
+                    hideConsole()
+                    // 录制浮层是全屏窗口且在录制开始后才添加，按「同类型窗口后加者在上」的规则
+                    // 会压在悬浮球/侧坞之上，导致录制期间这两个都点不到。重新挂载一次即可把它们置顶。
+                    raiseOverlaysToTop()
+                }
             }
         }
+    }
+
+    /**
+     * 把悬浮球与侧坞重新挂载一次，让它们回到同类型悬浮窗的最上层。
+     *
+     * 只对**录制开始前就已存在**的窗口有必要：录制浮层（PreciseCaptureOverlay）是全屏窗口、
+     * 且在那之后才 addView，因此会盖住它们。窗口实例与参数都复用，位置/尺寸/flags 不变。
+     * 录制期间新打开的窗口（如完整控制台、步骤编辑器）本来就是后加的，天然在最上层，无需处理。
+     */
+    private fun raiseOverlaysToTop() {
+        ballView?.let { reattachToTop(it, ballParams) }
+        railView?.let { reattachToTop(it, railParams) }
+    }
+
+    /** 先移除再加回同一实例，即可改变同类型悬浮窗的 z 序（挪到最上层）。 */
+    private fun reattachToTop(view: View, params: WindowManager.LayoutParams?) {
+        if (params == null) return
+        runCatching { windowManager.removeView(view) }
+        runCatching { windowManager.addView(view, params) }
+            .onFailure { RuntimeBus.log(LogLevel.WARN, "悬浮窗置顶失败：${it.message}") }
     }
 
     /**
@@ -826,6 +854,7 @@ class OverlayService : Service() {
             return
         }
         railView = rail
+        railParams = params
         railLed = led
         railPlay = play
         railRecord = record
@@ -840,6 +869,7 @@ class OverlayService : Service() {
     private fun hideRail() {
         val view = railView ?: return
         railView = null
+        railParams = null
         railLed = null
         railPlay = null
         railRecord = null
