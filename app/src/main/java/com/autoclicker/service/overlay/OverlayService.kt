@@ -667,8 +667,9 @@ class OverlayService : Service() {
 
     /**
      * 点悬浮球默认展开的不是大控制台，而是这条贴边的细长条：
-     * 状态灯 + 开始/暂停 + 停止 + 录制 + 展开完整控制台 + 收起，竖排一列，
-     * 只占屏幕边上一小条，几乎不挡内容。想看日志/编辑步骤再点「展开」。
+     * 状态灯 + 运行/暂停 + 录制/暂停 + 退出 + 展开完整控制台，竖排一列，
+     * 只占屏幕边上一小条，几乎不挡内容。想看日志/编辑步骤再点「▤ 展开」。
+     * 收起不需要按钮：再点一次悬浮球即可（见 [toggleConsole] 的 railView 分支）。
      */
     private fun showRail() {
         if (railView != null) return
@@ -759,45 +760,45 @@ class OverlayService : Service() {
         rail.addView(play)
         rail.addView(gap(7))
 
-        rail.addView(
-            railTextButton("停止", bg = STOP_BG) {
-                ServiceLocator.player?.stop()
-                RuntimeBus.log("侧坞：停止")
-            },
-        )
-        rail.addView(gap(7))
-
-        rail.addView(
-            railTextButton("退出", bg = EXIT_BG) { finishTaskAndExit() },
-        )
-        rail.addView(gap(7))
-
+        // 录制/暂停：只做三态（开始 → 暂停 → 继续被暂停的录制）。
+        // 结束录制由下面的「退出」负责（它内部会先 Recorder.stop 保存步骤）。
         val record = railButton("●", tint = RECORD_COLOR) {
             if (!RecordingSession.isActive) {
                 Toast.makeText(this, "请先创建或打开一个任务，再开始录制", Toast.LENGTH_SHORT).show()
                 return@railButton
             }
-            if (!PermissionChecker.requireAccessibility(this)) return@railButton
-            if (Recorder.isRecording()) Recorder.stop(this) else Recorder.start(this)
-            RuntimeBus.log(if (Recorder.isRecording()) "侧坞：录制开始" else "侧坞：录制停止")
+            when (RuntimeBus.recording.value) {
+                RecordingState.RECORDING -> {
+                    Recorder.pause(this)
+                    RuntimeBus.log("侧坞：录制暂停")
+                }
+                RecordingState.PAUSED -> {
+                    Recorder.pause(this)
+                    RuntimeBus.log("侧坞：录制继续")
+                }
+                else -> {
+                    if (!PermissionChecker.requireAccessibility(this)) return@railButton
+                    Recorder.start(this)
+                    RuntimeBus.log("侧坞：录制开始")
+                }
+            }
         }
         railRecord = record
         rail.addView(record)
+        rail.addView(gap(7))
+
+        rail.addView(
+            railTextButton("退出", bg = EXIT_BG) { finishTaskAndExit() },
+        )
         rail.addView(gap(9))
         rail.addView(divider())
         rail.addView(gap(9))
 
+        // 完整控制台在本服务里只有这一个入口，不能移除。
         rail.addView(
             railButton("▤") {
                 hideRail()
                 showConsole()
-            },
-        )
-        rail.addView(gap(7))
-
-        rail.addView(
-            railButton("✕", tint = Color.parseColor("#BBBBBB")) {
-                hideRail()
             },
         )
 
@@ -833,7 +834,7 @@ class OverlayService : Service() {
             .setDuration(240L)
             .setInterpolator(DecelerateInterpolator())
             .start()
-        RuntimeBus.log("侧坞已展开（▤ 展开完整控制台，✕ 收起）")
+        RuntimeBus.log("侧坞已展开（▶ 运行/暂停，● 录制/暂停，退出，▤ 展开完整控制台；点悬浮球可收起）")
     }
 
     private fun hideRail() {
@@ -855,7 +856,8 @@ class OverlayService : Service() {
         val recording = RuntimeBus.recording.value
         (led.background as? GradientDrawable)?.setColor(ballColor())
         railPlay?.text = if (state == PlaybackState.RUNNING) "‖" else "▶"
-        railRecord?.text = if (recording == RecordingState.RECORDING) "■" else "●"
+        // ● = 可开始/继续录制；‖ = 录制中，点它会暂停。
+        railRecord?.text = if (recording == RecordingState.RECORDING) "‖" else "●"
         railRecord?.alpha = if (recording != RecordingState.IDLE) 1f else 0.8f
     }
 
@@ -1446,10 +1448,7 @@ class OverlayService : Service() {
         private val GROUP_COLOR = 0xFF4FC3F7.toInt()
         private val RECORD_COLOR = 0xFFFF8A80.toInt()
 
-        /** 侧坞「停止」按钮底色：比录制的粉红更深，避免两个按钮被混淆。 */
-        private val STOP_BG = 0xFFD32F2F.toInt()
-
-        /** 侧坞「退出」按钮底色：与「停止」的红区分开，避免两个红色按钮离得太近。 */
+        /** 侧坞「退出」按钮底色：蓝灰，与录制按钮的粉红区分开。 */
         private val EXIT_BG = 0xFF546E7A.toInt()
         private val STATUS_BAR_BG = 0xE01B1B1B.toInt()
 
